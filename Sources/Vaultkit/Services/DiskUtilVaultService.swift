@@ -167,6 +167,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
                 }
             }
             closeGuard(at: canonical)
+            try await ensureLocked(vol.deviceIdentifier)
             return
         }
 
@@ -189,6 +190,30 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
             guard r.status == 0 else { throw VaultError.busy(holders: []) }
         }
         closeGuard(at: canonical)
+        try await ensureLocked(vol.deviceIdentifier)
+    }
+
+    /// diskutil lockVolume can report success while a mounted Time Machine
+    /// snapshot still references the volume's keys — the volume silently stays
+    /// unlocked. Verify, evict snapshot mounts, relock, and only then believe it.
+    private func ensureLocked(_ device: String) async throws {
+        if await isLocked(device) { return }
+        let m = try await runner.run("/sbin/mount", [])
+        for line in m.stdout.split(separator: "\n") where line.contains("@/dev/\(device) on ") {
+            if let start = line.range(of: " on "), let end = line.range(of: " (apfs") {
+                let snapshotPath = String(line[start.upperBound..<end.lowerBound])
+                _ = try? await runner.run(diskutil, ["unmount", snapshotPath])
+            }
+        }
+        _ = try? await runner.run(diskutil, ["apfs", "lockVolume", device])
+        guard await isLocked(device) else {
+            throw VaultError.commandFailed("The volume still reports unlocked after locking — a Time Machine snapshot or other system service is holding its keys. Try again in a minute.")
+        }
+    }
+
+    private func isLocked(_ device: String) async -> Bool {
+        guard let vols = try? await listVolumes() else { return false }
+        return vols.first { $0.deviceIdentifier == device }?.locked ?? false
     }
 
     func dissenters(for org: Organization) async throws -> [String] {

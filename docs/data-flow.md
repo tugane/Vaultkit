@@ -195,5 +195,8 @@ source, because its audience will (rightly) read the code before trusting it.
 7. **Backup software interaction** → Time Machine snapshots can hold a vault
    *unlocked after unmount* (plain mount then needs no passphrase — handle the
    `-69589 not locked` path), and an **included vault path copies plaintext to
-   the backup destination** while mounted. The Doctor must check: vault paths
-   excluded from backups, or the backup destination itself encrypted.
+   the backup destination** while mounted. Worse: **`lockVolume` reports
+   success while a mounted snapshot still references the keys** — the volume
+   silently stays unlocked, so every lock must be verified afterwards (evict
+   snapshot mounts, relock, re-check) before claiming "at rest". The Doctor
+   must check: vault paths excluded from backups, or the destination encrypted.
