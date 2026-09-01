@@ -17,6 +17,16 @@ final class AppStore: ObservableObject {
         // Populate at launch regardless of which scene shows first — the
         // menu-bar extra must not depend on the main window ever opening.
         Task { await runDoctor() }
+
+        // Mount/eject can happen outside the app (work-on/work-off, Finder,
+        // Disk Utility) — refresh on the system's own mount notifications so
+        // the cards never show stale vault state.
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in await self?.refresh() }
+            }
+        }
     }
 
     /// 100 minus weighted findings: critical −25, warning −10, info −3.

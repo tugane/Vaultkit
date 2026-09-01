@@ -66,6 +66,7 @@ struct ScoreCard: View {
             let warnings = findings.filter { $0.severity == .warning }.count
             Text(criticals > 0 ? "\(criticals) critical to fix"
                  : warnings > 0 ? "\(warnings) warning\(warnings == 1 ? "" : "s")"
+                 : !findings.isEmpty ? "\(findings.count) informational note\(findings.count == 1 ? "" : "s")"
                  : "All checks passing")
                 .font(.callout.weight(.medium))
                 .foregroundStyle(color)
