@@ -1,7 +1,7 @@
 import SwiftUI
 import TuganeDesign
 
-// MARK: - Dashboard: posture ring + org status cards
+// MARK: - Dashboard: hero + posture ring + org status cards
 
 struct DashboardView: View {
     @EnvironmentObject var store: AppStore
@@ -9,103 +9,101 @@ struct DashboardView: View {
     @AppStorage("vk.theme") private var themeRaw = Theme.dark.rawValue
 
     private var theme: Theme { Theme(rawValue: themeRaw) ?? .dark }
-
-    private var exposedCount: Int {
-        store.organizations.filter { $0.vault == .mounted || $0.vault == .unlocked || $0.vault == .misplaced }.count
-    }
+    private var exposed: Int { store.exposedOrgs.count }
 
     private var headline: String {
-        exposedCount == 0 ? "Everything at rest." : "\(exposedCount) vault\(exposedCount == 1 ? "" : "s") exposed right now."
+        exposed == 0
+            ? "Everything is\nat rest."
+            : "\(plural(exposed, "vault")) exposed\nright now."
     }
 
     private var subtitle: String {
-        exposedCount == 0
-            ? "All organization data is ciphertext. Mount a vault when you're ready to work — every unlock and commit asks for your touch."
+        exposed == 0
+            ? "All organization data is ciphertext. Mount a vault when you're ready to work — every unlock, commit and push asks for your touch."
             : "Exposed vaults are readable by anything running on this Mac. Secure what you're not actively using."
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Auger's hero: statement, subtitle, pill row.
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(headline)
-                        .font(.system(size: 34, weight: .bold))
-                        .tracking(-0.5)
-                    Text(subtitle)
-                        .font(.system(size: 14))
-                        .foregroundStyle(p.label2)
-                        .frame(maxWidth: 560, alignment: .leading)
-                    HStack(spacing: 10) {
-                        if exposedCount > 0 {
-                            PillButton("Secure All", role: .accent) { Task { await store.secureAll() } }
-                        }
-                        if store.organizations.contains(where: { $0.vault == .mounted || $0.vault == .unlocked }) {
-                            PillButton("Clone a Repository", role: exposedCount > 0 ? .neutral : .accent) {
-                                if let first = store.organizations.first(where: { $0.vault == .mounted || $0.vault == .unlocked }) {
-                                    store.cloneTarget = first
+        VStack(spacing: 0) {
+            PageHeader(title: "Dashboard") {
+                IconButton(symbol: theme == .dark ? "sun.max" : "moon",
+                           help: "Switch to \(theme.toggleLabel.lowercased()) mode") {
+                    themeRaw = theme.toggled.rawValue
+                }
+                if store.doctorRunning {
+                    ProgressView().controlSize(.small).frame(width: 30, height: 30)
+                } else {
+                    IconButton(symbol: "arrow.clockwise", help: "Re-run checks") {
+                        Task { await store.runDoctor() }
+                    }
+                }
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Hero: statement, subtitle, pill row (Auger's Home scale).
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(headline)
+                            .font(.system(size: 40, weight: .bold))
+                            .tracking(-1)
+                            .lineSpacing(2)
+                        Text(subtitle)
+                            .font(.system(size: 15))
+                            .foregroundStyle(p.label2)
+                            .lineSpacing(3)
+                            .frame(maxWidth: 460, alignment: .leading)
+                            .padding(.top, 16)
+                        HStack(spacing: 12) {
+                            if exposed > 0 {
+                                PillButton(title: "Secure All", role: .accent, height: 38, hpad: 22,
+                                           font: .system(size: 14, weight: .semibold)) {
+                                    Task { await store.secureAll() }
+                                }
+                            }
+                            if !store.cloneableOrgs.isEmpty {
+                                PillButton(title: "Clone a Repository",
+                                           role: exposed > 0 ? .neutral : .accent,
+                                           height: 38, hpad: exposed > 0 ? 18 : 22,
+                                           font: .system(size: 14, weight: exposed > 0 ? .medium : .semibold)) {
+                                    store.openClone()
                                 }
                             }
                         }
+                        .padding(.top, 26)
                     }
-                    .padding(.top, 4)
-                }
-                .padding(.top, 8)
 
-                HStack(alignment: .top, spacing: 20) {
-                    ScoreCard(score: store.postureScore, findings: store.findings)
-                    SummaryCard()
-                }
-                Text("Organizations")
-                    .font(.title3.weight(.semibold))
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
-                    ForEach(store.organizations) { org in
-                        OrgCard(org: org)
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 14),
+                                        GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                        ScoreCard(score: store.postureScore, findings: store.findings)
+                        SummaryCard()
+                    }
+                    .padding(.top, 48)
+
+                    SectionLabel("Organizations")
+                        .padding(.top, 34)
+                        .padding(.bottom, 12)
+
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 14),
+                                        GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                        ForEach(store.organizations) { org in
+                            OrgCard(org: org)
+                        }
                     }
                 }
+                .padding(.horizontal, 40).padding(.top, 8).padding(.bottom, 32)
             }
-            .padding(24)
         }
         .background(alignment: .topTrailing) {
-            // Auger's corner glow.
+            // Auger's corner glow, dialed back in light where it would smear.
             RadialGradient(
-                colors: [p.accent.opacity(0.38), p.accent.opacity(0.10), .clear],
-                center: .topTrailing, startRadius: 40, endRadius: 560
+                colors: [p.accent.opacity(0.55 * p.glowStrength),
+                         p.accent.opacity(0.16 * p.glowStrength),
+                         .clear],
+                center: .topTrailing, startRadius: 30, endRadius: 620
             )
-            .frame(width: 700, height: 620)
-            .blur(radius: 40)
+            .frame(width: 780, height: 680)
+            .blur(radius: 36)
             .allowsHitTesting(false)
-        }
-        .background(p.content)
-        .navigationTitle("Dashboard")
-        .toolbar {
-            Button {
-                if let first = store.organizations.first(where: { $0.vault == .mounted || $0.vault == .unlocked }) {
-                    store.cloneTarget = first
-                }
-            } label: {
-                Label("Clone", systemImage: "square.and.arrow.down.on.square")
-            }
-            .disabled(!store.organizations.contains { $0.vault == .mounted || $0.vault == .unlocked })
-            .help("Clone a repository into a vault (mounts it first if needed)")
-
-            // Auger's signature: the theme is the app's own, toggled in-app.
-            Button {
-                themeRaw = theme.toggled.rawValue
-            } label: {
-                Label(theme.toggleLabel, systemImage: theme == .dark ? "sun.max" : "moon")
-            }
-            .help("Switch to \(theme.toggleLabel.lowercased()) mode")
-
-            if store.doctorRunning {
-                ProgressView().controlSize(.small)
-            } else {
-                Button {
-                    Task { await store.runDoctor() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-            }
         }
     }
 }
@@ -115,44 +113,51 @@ struct ScoreCard: View {
     let findings: [DoctorFinding]
     @Environment(\.palette) private var p
 
-    private var color: Color {
+    private var ringColor: Color {
         score >= 85 ? p.green : score >= 60 ? p.amber : p.red
+    }
+    private var textColor: Color {
+        score >= 85 ? p.greenText : score >= 60 ? p.amberText : p.redText
+    }
+
+    private var statusLine: String {
+        let criticals = findings.filter { $0.severity == .critical }.count
+        let warnings = findings.filter { $0.severity == .warning }.count
+        if criticals > 0 { return "\(plural(criticals, "critical issue")) to fix" }
+        if warnings > 0 { return plural(warnings, "warning") }
+        if !findings.isEmpty { return plural(findings.count, "informational note") }
+        return "All checks passing"
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        HStack(spacing: 20) {
             ZStack {
                 Circle()
-                    .stroke(color.opacity(0.15), lineWidth: 12)
+                    .stroke(ringColor.opacity(0.15), lineWidth: 11)
                 Circle()
                     .trim(from: 0, to: CGFloat(score) / 100)
-                    .stroke(color.gradient, style: StrokeStyle(lineWidth: 13, lineCap: .round))
+                    .stroke(ringColor.gradient, style: StrokeStyle(lineWidth: 11, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .shadow(color: color.opacity(0.45), radius: 10)
+                    .shadow(color: ringColor.opacity(0.45 * p.glowStrength), radius: 10)
                     .animation(.easeOut(duration: 0.6), value: score)
-                VStack(spacing: 0) {
-                    Text("\(score)")
-                        .font(.system(size: 46, weight: .bold, design: .rounded))
-                        .contentTransition(.numericText())
-                    Text("posture")
-                        .font(.caption)
-                        .foregroundStyle(p.label3)
-                }
+                Text("\(score)")
+                    .font(.system(size: 30, weight: .bold).monospacedDigit())
+                    .tracking(-0.7)
+                    .contentTransition(.numericText())
             }
-            .frame(width: 140, height: 140)
+            .frame(width: 96, height: 96)
 
-            let criticals = findings.filter { $0.severity == .critical }.count
-            let warnings = findings.filter { $0.severity == .warning }.count
-            Text(criticals > 0 ? "\(criticals) critical to fix"
-                 : warnings > 0 ? "\(warnings) warning\(warnings == 1 ? "" : "s")"
-                 : !findings.isEmpty ? "\(findings.count) informational note\(findings.count == 1 ? "" : "s")"
-                 : "All checks passing")
-                .font(.callout.weight(.medium))
-                .foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Posture").font(.system(size: 14, weight: .semibold))
+                Text(statusLine)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(textColor)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(20)
-        .frame(width: 200)
-        .card(p.card, radius: 16)
+        .padding(.horizontal, 22).padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(p.card, radius: 12)
     }
 }
 
@@ -162,29 +167,30 @@ struct SummaryCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("At a glance", systemImage: "eye")
-                .font(.headline)
+            Text("At a glance").font(.system(size: 14, weight: .semibold))
             summaryRow("lock.fill", p.green,
-                       "\(store.organizations.filter { $0.vault == .locked }.count) vault(s) at rest")
-            summaryRow("lock.open.fill", .orange,
-                       "\(store.organizations.filter { $0.vault == .mounted }.count) mounted · exposed")
+                       "\(plural(store.organizations.filter { $0.vault == .locked }.count, "vault")) at rest")
+            summaryRow("lock.open.fill", p.orange,
+                       "\(plural(store.exposedOrgs.count, "vault")) exposed")
             summaryRow("signature", p.accent,
                        "\(store.organizations.filter(\.signingEnabled).count)/\(store.organizations.count) orgs signing commits")
             summaryRow("stethoscope", p.label3,
-                       store.findings.isEmpty ? "Doctor: no findings" : "Doctor: \(store.findings.count) finding(s)")
+                       store.findings.isEmpty ? "Doctor: no findings"
+                                              : "Doctor: \(plural(store.findings.count, "finding"))")
             Spacer(minLength: 0)
         }
-        .padding(20)
+        .padding(.horizontal, 22).padding(.vertical, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card(p.card, radius: 16)
+        .card(p.card, radius: 12)
     }
 
     private func summaryRow(_ icon: String, _ color: Color, _ text: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(color)
                 .frame(width: 18)
-            Text(text).font(.callout)
+            Text(text).font(.system(size: 13))
         }
     }
 }
@@ -194,87 +200,68 @@ struct OrgCard: View {
     @Environment(\.palette) private var p
     let org: Organization
 
-    private var stateColor: Color {
-        switch org.vault {
-        case .mounted: .orange
-        case .locked: p.green
-        case .unlocked: p.amber
-        case .misplaced: p.red
-        case .none: p.label3
-        }
-    }
-
-    private var stateText: String {
-        switch org.vault {
-        case .mounted: "Mounted · exposed"
-        case .locked: "Locked · at rest"
-        case .unlocked: "Unlocked · not at rest"
-        case .misplaced: "Mounted · wrong location"
-        case .none: "No vault"
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                // Auger's icon treatment: flat, tinted, no filled badge.
-                Image(systemName: org.vault == .locked ? "lock.fill" : org.vault == .none ? "questionmark.square.dashed" : "lock.open.fill")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(stateColor)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(org.displayName).font(.headline)
-                    Text(stateText)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(stateColor)
+            HStack(spacing: 16) {
+                Image(systemName: org.vault.icon)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(org.vault.color(p))
+                    .frame(width: 34, height: 38)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(org.displayName).font(.system(size: 14, weight: .semibold))
+                    Text(org.vault.label)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(org.vault.textColor(p))
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
             Text(org.gitEmail.isEmpty ? org.folderPath : org.gitEmail)
-                .font(.caption)
-                .foregroundStyle(p.label3)
+                .font(.system(size: 12.5))
+                .foregroundStyle(p.label2)
                 .lineLimit(1)
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 // Drop chips before ever wrapping them when buttons need room.
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         chip("key.fill", org.keyLabel)
                         chip("signature", org.signingEnabled ? "signing" : "unsigned")
                     }
                     chip("signature", org.signingEnabled ? "signing" : "unsigned")
                     Color.clear.frame(width: 1, height: 1)
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 if store.busyOrgs.contains(org.name) {
                     ProgressView().controlSize(.small)
                 } else {
-                    // One pill = the primary action; secondary actions are
-                    // Auger-style text links, so pills never truncate.
-                    switch org.vault {
-                    case .locked:
-                        pill("Mount", .accent) { store.mountTarget = org }
-                    case .mounted:
-                        link("Eject") { Task { await store.eject(org) } }
-                        pill("Clone…", .accent) { store.cloneTarget = org }
-                    case .unlocked:
-                        link("Mount") { Task { await store.relocate(org) } }
-                        link("Secure") { Task { await store.eject(org) } }
-                        pill("Clone…", .accent) { store.cloneTarget = org }
-                    case .misplaced:
-                        pill("Relocate", .destructive) { Task { await store.relocate(org) } }
-                    case .none:
-                        EmptyView()
+                    // One pill = the primary action; secondary actions are text
+                    // links, so pills never truncate.
+                    HStack(spacing: 10) {
+                        switch org.vault {
+                        case .locked:
+                            pill("Mount", .accent) { store.mountTarget = org }
+                        case .mounted:
+                            link("Eject") { Task { await store.eject(org) } }
+                            pill("Clone…", .accent) { store.cloneTarget = org }
+                        case .unlocked:
+                            link("Mount") { Task { await store.relocate(org) } }
+                            link("Secure") { Task { await store.eject(org) } }
+                            pill("Clone…", .accent) { store.cloneTarget = org }
+                        case .misplaced:
+                            pill("Relocate", .destructive) { Task { await store.relocate(org) } }
+                        case .none:
+                            EmptyView()
+                        }
                     }
                 }
             }
         }
-        .padding(16)
-        .hoverFill(p.card, p.cardHover, radius: 16)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 22).padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .hoverFill(p.card, p.cardHover, radius: 12)
     }
 
     private func pill(_ title: String, _ role: PillRole, action: @escaping () -> Void) -> some View {
-        PillButton(title, role: role, height: 26, hpad: 12,
+        PillButton(title: title, role: role, height: 30, hpad: 14,
                    font: .system(size: 12.5, weight: .medium), action: action)
     }
 
@@ -284,14 +271,16 @@ struct OrgCard: View {
     }
 
     private func chip(_ icon: String, _ text: String) -> some View {
-        Label(text, systemImage: icon)
-            .font(.caption2)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(p.btn))
-            .foregroundStyle(p.label2)
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 10, weight: .medium))
+            Text(text).font(.system(size: 12))
+        }
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(p.btn))
+        .foregroundStyle(p.label2)
     }
 }
 
@@ -300,33 +289,35 @@ struct OrgCard: View {
 struct DoctorView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.palette) private var p
-    @State private var running = false
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            PageHeader(title: "Doctor") {
+                if store.doctorRunning {
+                    ProgressView().controlSize(.small).frame(width: 30, height: 30)
+                } else {
+                    IconButton(symbol: "arrow.clockwise", help: "Run checks") {
+                        Task { await store.runDoctor() }
+                    }
+                }
+            }
             if store.findings.isEmpty {
-                ContentUnavailableView(
-                    "All checks passing",
-                    systemImage: "checkmark.seal.fill",
-                    description: Text("No drift detected between your configuration and its security guarantees.")
+                EmptyState(
+                    symbol: "checkmark.seal.fill",
+                    title: "All checks passing",
+                    message: "No drift detected between your configuration and its security guarantees."
                 )
             } else {
-                List(store.findings) { finding in
-                    FindingRow(finding: finding)
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(store.findings) { finding in
+                            FindingRow(finding: finding)
+                        }
+                    }
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 32)
                 }
-                .scrollContentBackground(.hidden)
             }
-        }
-        .background(p.content)
-        .navigationTitle("Doctor")
-        .toolbar {
-            Button {
-                running = true
-                Task { await store.runDoctor(); running = false }
-            } label: {
-                Label(running ? "Scanning…" : "Run checks", systemImage: "arrow.clockwise")
-            }
-            .disabled(running)
         }
     }
 }
@@ -353,32 +344,35 @@ struct FindingRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 16) {
             Image(systemName: severityIcon)
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(severityColor)
-                .font(.title3)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(finding.checkName).font(.headline)
+                .frame(width: 34, height: 38)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(finding.checkName).font(.system(size: 13.5, weight: .medium))
                 Text(finding.detail)
-                    .font(.callout)
+                    .font(.system(size: 12.5))
                     .foregroundStyle(p.label2)
+                    .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                 if let remediation = finding.remediation {
                     Text(remediation)
-                        .font(.caption.monospaced())
+                        .font(.system(size: 12).monospaced())
                         .foregroundStyle(p.label3)
                         .textSelection(.enabled)
                 }
             }
-            Spacer()
+            Spacer(minLength: 12)
             if finding.autoFixable {
-                PillButton("Fix", role: .accent, height: 26, hpad: 12,
+                PillButton(title: "Fix", role: .accent, height: 30, hpad: 14,
                            font: .system(size: 12.5, weight: .medium)) {
                     Task { await store.applyFix(finding) }
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.horizontal, 22).padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .hoverFill(p.card, p.cardHover, radius: 12)
     }
 }

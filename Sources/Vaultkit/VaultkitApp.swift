@@ -25,8 +25,12 @@ struct VaultkitApp: App {
                 .environmentObject(store)
                 .environment(\.palette, theme.palette)
                 .preferredColorScheme(theme.colorScheme)
-                .frame(minWidth: 900, minHeight: 600)
+                .overlay { NoiseOverlay() }   // the language's film grain
+                .frame(minWidth: 940, minHeight: 640)
         }
+        // Auger's chrome: no system title bar, so sidebar and content (glow,
+        // grain, backgrounds) run edge to edge under the traffic lights.
+        .windowStyle(.hiddenTitleBar)
 
         // Menu-bar quick access: vault mount/eject without opening the main window.
         MenuBarExtra("Vaultkit", systemImage: "lock.shield") {
