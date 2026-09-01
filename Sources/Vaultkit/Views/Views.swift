@@ -127,6 +127,13 @@ final class AppStore: ObservableObject {
         await runDoctor()
         busyOrgs.remove(org.name)
     }
+
+    /// Put every exposed vault at rest (mounted, unlocked, or misplaced).
+    func secureAll() async {
+        for org in organizations where org.vault != .locked && org.vault != VaultState.none {
+            await eject(org)
+        }
+    }
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
@@ -153,12 +160,9 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $store.selection) { item in
-                Label(item.rawValue, systemImage: item.icon).tag(item)
-            }
-            .scrollContentBackground(.hidden)
-            .background(p.well)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+            SidebarView()
+                .background(p.well)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 210)
         } detail: {
             switch store.selection ?? .dashboard {
             case .dashboard: DashboardView()
@@ -182,6 +186,78 @@ struct ContentView: View {
             CloneSheet(org: org)
         }
         .tint(p.accent)
+    }
+}
+
+// MARK: - Sidebar (Auger language: sections, accent selection, trailing info)
+
+struct SidebarView: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            section("POSTURE")
+            row(.dashboard, trailing: nil)
+            row(.doctor, trailing: store.findings.isEmpty ? nil : "\(store.findings.count)")
+
+            section("MANAGE").padding(.top, 12)
+            row(.organizations, trailing: "\(store.organizations.count)")
+            row(.vaults, trailing: mountedTrailing)
+
+            Spacer()
+            Divider().overlay(p.sep2)
+            Text("Vaultkit 0.1")
+                .font(.caption)
+                .foregroundStyle(p.label3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+        }
+        .padding(10)
+    }
+
+    private var mountedTrailing: String? {
+        let mounted = store.organizations.filter { $0.vault == .mounted }.count
+        return mounted > 0 ? "\(mounted) open" : nil
+    }
+
+    private func section(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .tracking(0.8)
+            .foregroundStyle(p.label3)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 4)
+    }
+
+    private func row(_ item: SidebarItem, trailing: String?) -> some View {
+        let selected = (store.selection ?? .dashboard) == item
+        return Button {
+            store.selection = item
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: item.icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 20)
+                Text(item.rawValue)
+                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(selected ? .white.opacity(0.85) : p.label3)
+                }
+            }
+            .foregroundStyle(selected ? .white : p.label)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pointer)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? p.accent : .clear)
+        )
     }
 }
 

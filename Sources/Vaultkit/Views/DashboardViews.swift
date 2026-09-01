@@ -10,22 +10,71 @@ struct DashboardView: View {
 
     private var theme: Theme { Theme(rawValue: themeRaw) ?? .dark }
 
+    private var exposedCount: Int {
+        store.organizations.filter { $0.vault == .mounted || $0.vault == .unlocked || $0.vault == .misplaced }.count
+    }
+
+    private var headline: String {
+        exposedCount == 0 ? "Everything at rest." : "\(exposedCount) vault\(exposedCount == 1 ? "" : "s") exposed right now."
+    }
+
+    private var subtitle: String {
+        exposedCount == 0
+            ? "All organization data is ciphertext. Mount a vault when you're ready to work — every unlock and commit asks for your touch."
+            : "Exposed vaults are readable by anything running on this Mac. Secure what you're not actively using."
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // Auger's hero: statement, subtitle, pill row.
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(headline)
+                        .font(.system(size: 34, weight: .bold))
+                        .tracking(-0.5)
+                    Text(subtitle)
+                        .font(.system(size: 14))
+                        .foregroundStyle(p.label2)
+                        .frame(maxWidth: 560, alignment: .leading)
+                    HStack(spacing: 10) {
+                        if exposedCount > 0 {
+                            PillButton("Secure All", role: .accent) { Task { await store.secureAll() } }
+                        }
+                        if store.organizations.contains(where: { $0.vault == .mounted || $0.vault == .unlocked }) {
+                            PillButton("Clone a Repository", role: exposedCount > 0 ? .neutral : .accent) {
+                                if let first = store.organizations.first(where: { $0.vault == .mounted || $0.vault == .unlocked }) {
+                                    store.cloneTarget = first
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(.top, 8)
+
                 HStack(alignment: .top, spacing: 20) {
                     ScoreCard(score: store.postureScore, findings: store.findings)
                     SummaryCard()
                 }
                 Text("Organizations")
                     .font(.title3.weight(.semibold))
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 16)], spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
                     ForEach(store.organizations) { org in
                         OrgCard(org: org)
                     }
                 }
             }
             .padding(24)
+        }
+        .background(alignment: .topTrailing) {
+            // Auger's corner glow.
+            RadialGradient(
+                colors: [p.accent.opacity(0.38), p.accent.opacity(0.10), .clear],
+                center: .topTrailing, startRadius: 40, endRadius: 560
+            )
+            .frame(width: 700, height: 620)
+            .blur(radius: 40)
+            .allowsHitTesting(false)
         }
         .background(p.content)
         .navigationTitle("Dashboard")
@@ -167,12 +216,12 @@ struct OrgCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(spacing: 10) {
+                // Auger's icon treatment: flat, tinted, no filled badge.
                 Image(systemName: org.vault == .locked ? "lock.fill" : org.vault == .none ? "questionmark.square.dashed" : "lock.open.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(stateColor.gradient))
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(stateColor)
+                    .frame(width: 28)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(org.displayName).font(.headline)
                     Text(stateText)
@@ -199,16 +248,18 @@ struct OrgCard: View {
                 if store.busyOrgs.contains(org.name) {
                     ProgressView().controlSize(.small)
                 } else {
+                    // One pill = the primary action; secondary actions are
+                    // Auger-style text links, so pills never truncate.
                     switch org.vault {
                     case .locked:
                         pill("Mount", .accent) { store.mountTarget = org }
                     case .mounted:
+                        link("Eject") { Task { await store.eject(org) } }
                         pill("Clone…", .accent) { store.cloneTarget = org }
-                        pill("Eject", .neutral) { Task { await store.eject(org) } }
                     case .unlocked:
+                        link("Mount") { Task { await store.relocate(org) } }
+                        link("Secure") { Task { await store.eject(org) } }
                         pill("Clone…", .accent) { store.cloneTarget = org }
-                        pill("Mount", .neutral) { Task { await store.relocate(org) } }
-                        pill("Secure", .neutral) { Task { await store.eject(org) } }
                     case .misplaced:
                         pill("Relocate", .destructive) { Task { await store.relocate(org) } }
                     case .none:
@@ -224,6 +275,11 @@ struct OrgCard: View {
 
     private func pill(_ title: String, _ role: PillRole, action: @escaping () -> Void) -> some View {
         PillButton(title, role: role, height: 26, hpad: 12,
+                   font: .system(size: 12.5, weight: .medium), action: action)
+    }
+
+    private func link(_ title: String, action: @escaping () -> Void) -> some View {
+        LinkButton(title, color: p.label2, hoverColor: p.label,
                    font: .system(size: 12.5, weight: .medium), action: action)
     }
 
