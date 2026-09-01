@@ -1,9 +1,14 @@
 import SwiftUI
+import TuganeDesign
 
 // MARK: - Dashboard: posture ring + org status cards
 
 struct DashboardView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
+    @AppStorage("vk.theme") private var themeRaw = Theme.dark.rawValue
+
+    private var theme: Theme { Theme(rawValue: themeRaw) ?? .dark }
 
     var body: some View {
         ScrollView {
@@ -22,18 +27,27 @@ struct DashboardView: View {
             }
             .padding(24)
         }
-        .background(Theme.bg)
+        .background(p.content)
         .navigationTitle("Dashboard")
         .toolbar {
             Button {
-                if let first = store.organizations.first(where: { $0.vault == .mounted }) {
+                if let first = store.organizations.first(where: { $0.vault == .mounted || $0.vault == .unlocked }) {
                     store.cloneTarget = first
                 }
             } label: {
                 Label("Clone", systemImage: "square.and.arrow.down.on.square")
             }
-            .disabled(!store.organizations.contains { $0.vault == .mounted })
-            .help("Clone a repository into a mounted vault")
+            .disabled(!store.organizations.contains { $0.vault == .mounted || $0.vault == .unlocked })
+            .help("Clone a repository into a vault (mounts it first if needed)")
+
+            // Auger's signature: the theme is the app's own, toggled in-app.
+            Button {
+                themeRaw = theme.toggled.rawValue
+            } label: {
+                Label(theme.toggleLabel, systemImage: theme == .dark ? "sun.max" : "moon")
+            }
+            .help("Switch to \(theme.toggleLabel.lowercased()) mode")
+
             if store.doctorRunning {
                 ProgressView().controlSize(.small)
             } else {
@@ -50,9 +64,10 @@ struct DashboardView: View {
 struct ScoreCard: View {
     let score: Int
     let findings: [DoctorFinding]
+    @Environment(\.palette) private var p
 
     private var color: Color {
-        score >= 85 ? Theme.green : score >= 60 ? Theme.amber : Theme.red
+        score >= 85 ? p.green : score >= 60 ? p.amber : p.red
     }
 
     var body: some View {
@@ -72,7 +87,7 @@ struct ScoreCard: View {
                         .contentTransition(.numericText())
                     Text("posture")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(p.label3)
                 }
             }
             .frame(width: 140, height: 140)
@@ -88,30 +103,31 @@ struct ScoreCard: View {
         }
         .padding(20)
         .frame(width: 200)
-        .cardStyle()
+        .card(p.card, radius: 16)
     }
 }
 
 struct SummaryCard: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("At a glance", systemImage: "eye")
                 .font(.headline)
-            summaryRow("lock.fill", Theme.green,
+            summaryRow("lock.fill", p.green,
                        "\(store.organizations.filter { $0.vault == .locked }.count) vault(s) at rest")
             summaryRow("lock.open.fill", .orange,
                        "\(store.organizations.filter { $0.vault == .mounted }.count) mounted · exposed")
-            summaryRow("signature", Theme.accent,
+            summaryRow("signature", p.accent,
                        "\(store.organizations.filter(\.signingEnabled).count)/\(store.organizations.count) orgs signing commits")
-            summaryRow("stethoscope", Theme.label3,
+            summaryRow("stethoscope", p.label3,
                        store.findings.isEmpty ? "Doctor: no findings" : "Doctor: \(store.findings.count) finding(s)")
             Spacer(minLength: 0)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardStyle()
+        .card(p.card, radius: 16)
     }
 
     private func summaryRow(_ icon: String, _ color: Color, _ text: String) -> some View {
@@ -126,16 +142,16 @@ struct SummaryCard: View {
 
 struct OrgCard: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
     let org: Organization
-    @State private var hovering = false
 
     private var stateColor: Color {
         switch org.vault {
         case .mounted: .orange
-        case .locked: Theme.green
-        case .unlocked: Theme.amber
-        case .misplaced: Theme.red
-        case .none: .secondary
+        case .locked: p.green
+        case .unlocked: p.amber
+        case .misplaced: p.red
+        case .none: p.label3
         }
     }
 
@@ -167,38 +183,34 @@ struct OrgCard: View {
             }
             Text(org.gitEmail.isEmpty ? org.folderPath : org.gitEmail)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(p.label3)
                 .lineLimit(1)
             HStack(spacing: 6) {
-                chip("key.fill", org.keyLabel)
-                chip("signature", org.signingEnabled ? "signing" : "unsigned")
+                // Drop chips before ever wrapping them when buttons need room.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        chip("key.fill", org.keyLabel)
+                        chip("signature", org.signingEnabled ? "signing" : "unsigned")
+                    }
+                    chip("signature", org.signingEnabled ? "signing" : "unsigned")
+                    Color.clear.frame(width: 1, height: 1)
+                }
                 Spacer()
                 if store.busyOrgs.contains(org.name) {
                     ProgressView().controlSize(.small)
                 } else {
                     switch org.vault {
                     case .locked:
-                        Button("Mount") { store.mountTarget = org }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
+                        pill("Mount", .accent) { store.mountTarget = org }
                     case .mounted:
-                        Button("Clone…") { store.cloneTarget = org }
-                            .controlSize(.small)
-                        Button("Eject") { Task { await store.eject(org) } }
-                            .controlSize(.small)
+                        pill("Clone…", .accent) { store.cloneTarget = org }
+                        pill("Eject", .neutral) { Task { await store.eject(org) } }
                     case .unlocked:
-                        // keys are cached: mounting needs no passphrase
-                        Button("Mount") { Task { await store.relocate(org) } }
-                            .controlSize(.small)
-                        Button("Secure") { Task { await store.eject(org) } }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.yellow)
-                            .controlSize(.small)
+                        pill("Clone…", .accent) { store.cloneTarget = org }
+                        pill("Mount", .neutral) { Task { await store.relocate(org) } }
+                        pill("Secure", .neutral) { Task { await store.eject(org) } }
                     case .misplaced:
-                        Button("Relocate") { Task { await store.relocate(org) } }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.red)
-                            .controlSize(.small)
+                        pill("Relocate", .destructive) { Task { await store.relocate(org) } }
                     case .none:
                         EmptyView()
                     }
@@ -206,19 +218,24 @@ struct OrgCard: View {
             }
         }
         .padding(16)
-        .cardStyle(hovering: hovering)
-        .scaleEffect(hovering ? 1.015 : 1)
-        .animation(.spring(duration: 0.25), value: hovering)
-        .onHover { hovering = $0 }
+        .hoverFill(p.card, p.cardHover, radius: 16)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func pill(_ title: String, _ role: PillRole, action: @escaping () -> Void) -> some View {
+        PillButton(title, role: role, height: 26, hpad: 12,
+                   font: .system(size: 12.5, weight: .medium), action: action)
     }
 
     private func chip(_ icon: String, _ text: String) -> some View {
         Label(text, systemImage: icon)
             .font(.caption2)
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(Capsule().fill(Theme.chipFill))
-            .foregroundStyle(Theme.label2)
+            .background(Capsule().fill(p.btn))
+            .foregroundStyle(p.label2)
     }
 }
 
@@ -226,6 +243,7 @@ struct OrgCard: View {
 
 struct DoctorView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
     @State private var running = false
 
     var body: some View {
@@ -243,7 +261,7 @@ struct DoctorView: View {
                 .scrollContentBackground(.hidden)
             }
         }
-        .background(Theme.bg)
+        .background(p.content)
         .navigationTitle("Doctor")
         .toolbar {
             Button {
@@ -259,13 +277,14 @@ struct DoctorView: View {
 
 struct FindingRow: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
     let finding: DoctorFinding
 
     private var severityColor: Color {
         switch finding.severity {
-        case .critical: Theme.red
-        case .warning: Theme.amber
-        case .info: Theme.accent
+        case .critical: p.red
+        case .warning: p.amber
+        case .info: p.accent
         }
     }
 
@@ -287,25 +306,23 @@ struct FindingRow: View {
                 Text(finding.checkName).font(.headline)
                 Text(finding.detail)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(p.label2)
                     .fixedSize(horizontal: false, vertical: true)
                 if let remediation = finding.remediation {
                     Text(remediation)
                         .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(p.label3)
                         .textSelection(.enabled)
                 }
             }
             Spacer()
             if finding.autoFixable {
-                Button("Fix") {
+                PillButton("Fix", role: .accent, height: 26, hpad: 12,
+                           font: .system(size: 12.5, weight: .medium)) {
                     Task { await store.applyFix(finding) }
                 }
-                .controlSize(.small)
             }
         }
         .padding(.vertical, 6)
     }
 }
-
-// (card styling lives in Theme.swift — Auger design language)

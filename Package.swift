@@ -4,9 +4,13 @@ import PackageDescription
 let package = Package(
     name: "Vaultkit",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(path: "../TuganeDesign")
+    ],
     targets: [
         .executableTarget(
             name: "Vaultkit",
+            dependencies: ["TuganeDesign"],
             path: "Sources/Vaultkit"
         )
     ]

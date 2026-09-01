@@ -1,4 +1,5 @@
 import SwiftUI
+import TuganeDesign
 
 /// App-wide observable state. Derived from the system via services (I2);
 /// this object only caches.
@@ -69,9 +70,9 @@ final class AppStore: ObservableObject {
         organizations = orgs
     }
 
-    /// Move a misplaced (e.g. Finder-mounted) volume to its canonical path.
-    /// Usually passphrase-free (keys cached); falls back to the sheet if the
-    /// keys drop during the move.
+    /// Move a misplaced (e.g. Finder-mounted) volume to its canonical path,
+    /// or mount an unlocked one — passphrase-free while keys are cached.
+    /// Falls back to the sheet if the keys drop mid-way.
     func relocate(_ org: Organization) async {
         busyOrgs.insert(org.name)
         do {
@@ -83,6 +84,28 @@ final class AppStore: ObservableObject {
         busyOrgs.remove(org.name)
     }
 
+    /// Clone into the org's vault with the org's key (Touch ID prompt),
+    /// mounting first when the keys are cached. Returns true on success.
+    func clone(url: String, into org: Organization) async -> Bool {
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
+        do {
+            var target = org
+            if target.vault == .unlocked {
+                try await vaults.mount(target, passphrase: "")
+                target.vault = .mounted
+            }
+            let name = try await git.clone(url: url, into: target)
+            lastError = "Cloned \(name) into \(org.folderPath) with \(org.keyLabel)."
+            await runDoctor()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            await runDoctor()   // a failed attempt may still have mounted the vault
+            return false
+        }
+    }
+
     func mount(_ org: Organization, passphrase: String) async {
         busyOrgs.insert(org.name)
         do {
@@ -92,21 +115,6 @@ final class AppStore: ObservableObject {
         }
         await runDoctor()   // mutations refresh findings too
         busyOrgs.remove(org.name)
-    }
-
-    /// Clone into the org's mounted vault with the org's key (Touch ID prompt).
-    /// Returns true on success so the sheet can dismiss.
-    func clone(url: String, into org: Organization) async -> Bool {
-        busyOrgs.insert(org.name)
-        defer { busyOrgs.remove(org.name) }
-        do {
-            let name = try await git.clone(url: url, into: org)
-            lastError = "Cloned \(name) into \(org.folderPath) with \(org.keyLabel)."
-            return true
-        } catch {
-            lastError = error.localizedDescription
-            return false
-        }
     }
 
     func eject(_ org: Organization) async {
@@ -141,6 +149,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
 
     var body: some View {
         NavigationSplitView {
@@ -148,10 +157,10 @@ struct ContentView: View {
                 Label(item.rawValue, systemImage: item.icon).tag(item)
             }
             .scrollContentBackground(.hidden)
-            .background(Theme.rail)
+            .background(p.well)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            switch store.selection ?? .vaults {
+            switch store.selection ?? .dashboard {
             case .dashboard: DashboardView()
             case .organizations: OrganizationsView()
             case .vaults: VaultsView()
@@ -172,9 +181,7 @@ struct ContentView: View {
         .sheet(item: $store.cloneTarget) { org in
             CloneSheet(org: org)
         }
-        // Auger's design is committed dark — the palette owns the window.
-        .preferredColorScheme(.dark)
-        .tint(Theme.accent)
+        .tint(p.accent)
     }
 }
 
@@ -182,6 +189,7 @@ struct ContentView: View {
 
 struct VaultsView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
 
     var body: some View {
         Group {
@@ -198,7 +206,7 @@ struct VaultsView: View {
                 .scrollContentBackground(.hidden)
             }
         }
-        .background(Theme.bg)
+        .background(p.content)
         .navigationTitle("Vaults")
         .toolbar {
             Button {
@@ -212,6 +220,7 @@ struct VaultsView: View {
 
 struct VaultRow: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
     let org: Organization
 
     var body: some View {
@@ -224,13 +233,13 @@ struct VaultRow: View {
                 Text(org.displayName).font(.headline)
                 Text("\(org.folderPath) · \(org.gitEmail)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(p.label3)
             }
             Spacer()
             Text(stateLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(stateColor)
-            actionButton
+            actionButtons
         }
         .padding(.vertical, 4)
     }
@@ -247,11 +256,11 @@ struct VaultRow: View {
 
     private var stateColor: Color {
         switch org.vault {
-        case .none: .secondary
-        case .locked: Theme.green
+        case .none: p.label3
+        case .locked: p.green
         case .mounted: .orange
-        case .unlocked: Theme.amber
-        case .misplaced: Theme.red
+        case .unlocked: p.amber
+        case .misplaced: p.red
         }
     }
 
@@ -266,32 +275,38 @@ struct VaultRow: View {
     }
 
     @ViewBuilder
-    private var actionButton: some View {
+    private var actionButtons: some View {
         if store.busyOrgs.contains(org.name) {
             ProgressView().controlSize(.small)
         } else {
             switch org.vault {
             case .locked:
-                Button("Mount") { store.mountTarget = org }
+                pill("Mount", .accent) { store.mountTarget = org }
             case .mounted:
-                Button("Clone…") { store.cloneTarget = org }
-                Button("Eject") { Task { await store.eject(org) } }
+                pill("Clone…", .accent) { store.cloneTarget = org }
+                pill("Eject", .neutral) { Task { await store.eject(org) } }
             case .unlocked:
-                // keys cached: Mount is passphrase-free; Secure drops the keys
-                Button("Mount") { Task { await store.relocate(org) } }
-                Button("Secure") { Task { await store.eject(org) } }
+                pill("Clone…", .accent) { store.cloneTarget = org }
+                pill("Mount", .neutral) { Task { await store.relocate(org) } }
+                pill("Secure", .neutral) { Task { await store.eject(org) } }
             case .misplaced:
-                Button("Relocate") { Task { await store.relocate(org) } }
+                pill("Relocate", .destructive) { Task { await store.relocate(org) } }
             case .none:
                 EmptyView()
             }
         }
+    }
+
+    private func pill(_ title: String, _ role: PillRole, action: @escaping () -> Void) -> some View {
+        PillButton(title, role: role, height: 26, hpad: 12,
+                   font: .system(size: 12.5, weight: .medium), action: action)
     }
 }
 
 struct MountSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.palette) private var p
     let org: Organization
     @State private var passphrase = ""
     @State private var working = false
@@ -302,20 +317,21 @@ struct MountSheet: View {
                 .font(.title3.weight(.semibold))
             Text("Mounting exposes this organization's data until you eject. The passphrase is passed straight to diskutil and never stored.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(p.label2)
             SecureField("Vault passphrase", text: $passphrase)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(submit)
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button(working ? "Unlocking…" : "Mount") { submit() }
-                    .keyboardShortcut(.defaultAction)
+                PillButton("Cancel", role: .neutral, height: 30, hpad: 14) { dismiss() }
+                PillButton(working ? "Unlocking…" : "Mount", role: .accent, height: 30, hpad: 14) { submit() }
                     .disabled(passphrase.isEmpty || working)
+                    .opacity(passphrase.isEmpty || working ? 0.5 : 1)
             }
         }
         .padding(24)
         .frame(width: 420)
+        .background(p.sheet)
     }
 
     private func submit() {
@@ -334,16 +350,19 @@ struct MountSheet: View {
 struct CloneSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.palette) private var p
     let org: Organization                    // preselection (card that opened us)
     @State private var selectedName = ""
     @State private var url = ""
     @State private var working = false
 
-    private var mountedOrgs: [Organization] {
-        store.organizations.filter { $0.vault == .mounted }
+    // Unlocked vaults qualify too: keys are cached, so cloning just mounts
+    // them first with no passphrase.
+    private var cloneableOrgs: [Organization] {
+        store.organizations.filter { $0.vault == .mounted || $0.vault == .unlocked }
     }
     private var selected: Organization? {
-        mountedOrgs.first { $0.name == selectedName }
+        cloneableOrgs.first { $0.name == selectedName }
     }
     private var host: String? { GitService.host(of: url) }
     private var pinned: Bool { host.map(GitService.isPinned) ?? false }
@@ -354,15 +373,16 @@ struct CloneSheet: View {
                 .font(.title3.weight(.semibold))
             // Multiple vaults can be mounted — the destination is an explicit choice.
             Picker("Into", selection: $selectedName) {
-                ForEach(mountedOrgs) { o in
-                    Text("\(o.displayName)  (\(o.folderPath))").tag(o.name)
+                ForEach(cloneableOrgs) { o in
+                    Text("\(o.displayName)  (\(o.folderPath))\(o.vault == .unlocked ? "  — will mount first" : "")")
+                        .tag(o.name)
                 }
             }
             .pickerStyle(.menu)
             if let selected {
                 Text("Authenticates with \(selected.keyLabel) — expect a Touch ID prompt.")
                     .font(.callout)
-                    .foregroundStyle(Theme.label2)
+                    .foregroundStyle(p.label2)
             }
             TextField("git@host:org/repo.git", text: $url)
                 .textFieldStyle(.roundedBorder)
@@ -374,20 +394,19 @@ struct CloneSheet: View {
                     systemImage: pinned ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
                 )
                 .font(.caption)
-                .foregroundStyle(pinned ? Theme.green : Theme.red)
+                .foregroundStyle(pinned ? p.green : p.red)
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button(working ? "Cloning…" : "Clone") { submit() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                PillButton("Cancel", role: .neutral, height: 30, hpad: 14) { dismiss() }
+                PillButton(working ? "Cloning…" : "Clone", role: .accent, height: 30, hpad: 14) { submit() }
                     .disabled(url.isEmpty || !pinned || working || selected == nil)
+                    .opacity(url.isEmpty || !pinned || working || selected == nil ? 0.5 : 1)
             }
         }
         .padding(24)
         .frame(width: 470)
-        .background(Theme.bg2)
+        .background(p.sheet)
         .onAppear { selectedName = org.name }
     }
 
@@ -406,6 +425,7 @@ struct CloneSheet: View {
 
 struct OrganizationsView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.palette) private var p
 
     var body: some View {
         List(store.organizations) { org in
@@ -413,12 +433,12 @@ struct OrganizationsView: View {
                 Text(org.displayName).font(.headline)
                 Text("\(org.gitEmail) · key \(org.keyLabel) · signing \(org.signingEnabled ? "on" : "off")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(p.label3)
             }
             .padding(.vertical, 2)
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.bg)
+        .background(p.content)
         .navigationTitle("Organizations")
     }
 }

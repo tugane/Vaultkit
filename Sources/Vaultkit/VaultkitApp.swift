@@ -1,4 +1,5 @@
 import SwiftUI
+import TuganeDesign
 
 /// Running as a bare SPM executable (no .app bundle) the process defaults to a
 /// background-style activation policy: windows render but never become key, so
@@ -14,11 +15,16 @@ final class ActivationDelegate: NSObject, NSApplicationDelegate {
 struct VaultkitApp: App {
     @NSApplicationDelegateAdaptor(ActivationDelegate.self) private var delegate
     @StateObject private var store = AppStore()
+    @AppStorage("vk.theme") private var themeRaw = Theme.dark.rawValue
+
+    private var theme: Theme { Theme(rawValue: themeRaw) ?? .dark }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environment(\.palette, theme.palette)
+                .preferredColorScheme(theme.colorScheme)
                 .frame(minWidth: 900, minHeight: 600)
         }
 
@@ -26,6 +32,7 @@ struct VaultkitApp: App {
         MenuBarExtra("Vaultkit", systemImage: "lock.shield") {
             MenuBarView()
                 .environmentObject(store)
+                .environment(\.palette, theme.palette)
         }
     }
 }
