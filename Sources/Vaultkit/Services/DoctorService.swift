@@ -1,4 +1,5 @@
 import Foundation
+import TuganeDesign
 
 /// Read-only drift detection (UC6). Every check derives from the system itself
 /// (invariant I2) — each one below exists because the drift actually happened
@@ -19,8 +20,46 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
         findings += ambientCredentialChecks()
         findings += gitIdentityChecks(orgs: orgs)
         findings += await backupChecks(orgs: orgs)
+        findings += await signatureChecks(orgs: orgs)
         findings += await systemPostureChecks()
         return findings.sorted { $0.severity > $1.severity }
+    }
+
+    // MARK: signature health
+    //
+    // Observed in the wild: the Secure Enclave provider can emit an SSHSIG that
+    // does not verify, while SSH auth with the same key keeps working. The
+    // commit looks signed, git reports "B", and nothing warns you — so check.
+
+    private func signatureChecks(orgs: [Organization]) async -> [DoctorFinding] {
+        var findings: [DoctorFinding] = []
+        for org in orgs where org.signingEnabled && org.vault == .mounted {
+            let root = expand(org.folderPath)
+            guard let repos = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for repo in repos {
+                let path = "\(root)/\(repo)"
+                guard fm.fileExists(atPath: "\(path)/.git") else { continue }
+                guard let r = try? await runner.run(
+                    "/usr/bin/git",
+                    ["-C", path, "log", "--format=%h %G?", "-20"]
+                ), r.status == 0 else { continue }
+
+                let bad = r.stdout.split(separator: "\n").filter { line in
+                    let flag = line.split(separator: " ").last.map(String.init) ?? ""
+                    return flag == "B" || flag == "E"
+                }
+                guard !bad.isEmpty else { continue }
+                findings.append(DoctorFinding(
+                    checkName: "Unverifiable commit signatures",
+                    severity: .warning,
+                    detail: "\(plural(bad.count, "recent commit")) in \(repo) carry a signature that does not verify (\(bad.prefix(3).joined(separator: ", "))). Usually a Secure Enclave provider glitch rather than tampering — but pushing them shows red on the forge.",
+                    remediation: "Re-sign the tip with: git -C \(path) commit --amend --no-edit",
+                    autoFixable: false,
+                    orgName: org.name
+                ))
+            }
+        }
+        return findings
     }
 
     // MARK: placeholder guards (a cancelled unlock once left one writable)
