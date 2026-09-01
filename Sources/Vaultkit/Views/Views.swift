@@ -460,14 +460,23 @@ struct VaultRow: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(org.displayName)
                     .font(.system(size: 13.5, weight: .medium))
+                    .lineLimit(1)
+                // The identity line is the one element that may give way: it
+                // middle-truncates so the head and tail of the path both stay
+                // readable, rather than wrapping the row to two lines.
                 Text("\(org.folderPath) · \(org.gitEmail)")
                     .font(.system(size: 12.5))
                     .foregroundStyle(p.label2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
+            .layoutPriority(1)
             Spacer(minLength: 12)
             Text(org.vault.label)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(org.vault.textColor(p))
+                .lineLimit(1)
+                .fixedSize()
             actionButtons
         }
         .padding(.horizontal, 22).padding(.vertical, 20)
