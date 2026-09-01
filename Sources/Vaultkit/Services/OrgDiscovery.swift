@@ -30,7 +30,8 @@ struct OrgDiscovery {
                 folderPath: "~/work/\(name)",
                 keyLabel: "ssh-\(name)",
                 signingEnabled: perOrg.contains("gpgsign = true"),
-                vault: .none                         // filled in by VaultServing
+                vault: .none,                        // filled in by VaultServing
+                sshCommand: firstValue(of: "sshCommand", in: perOrg)
             ))
         }
         return orgs

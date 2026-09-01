@@ -22,12 +22,26 @@ struct DashboardView: View {
             }
             .padding(24)
         }
+        .background(Theme.bg)
         .navigationTitle("Dashboard")
         .toolbar {
             Button {
-                Task { await store.runDoctor() }
+                if let first = store.organizations.first(where: { $0.vault == .mounted }) {
+                    store.cloneTarget = first
+                }
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label("Clone", systemImage: "square.and.arrow.down.on.square")
+            }
+            .disabled(!store.organizations.contains { $0.vault == .mounted })
+            .help("Clone a repository into a mounted vault")
+            if store.doctorRunning {
+                ProgressView().controlSize(.small)
+            } else {
+                Button {
+                    Task { await store.runDoctor() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
             }
         }
     }
@@ -38,7 +52,7 @@ struct ScoreCard: View {
     let findings: [DoctorFinding]
 
     private var color: Color {
-        score >= 85 ? .green : score >= 60 ? .orange : .red
+        score >= 85 ? Theme.green : score >= 60 ? Theme.amber : Theme.red
     }
 
     var body: some View {
@@ -48,19 +62,20 @@ struct ScoreCard: View {
                     .stroke(color.opacity(0.15), lineWidth: 12)
                 Circle()
                     .trim(from: 0, to: CGFloat(score) / 100)
-                    .stroke(color, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                    .stroke(color.gradient, style: StrokeStyle(lineWidth: 13, lineCap: .round))
                     .rotationEffect(.degrees(-90))
+                    .shadow(color: color.opacity(0.45), radius: 10)
                     .animation(.easeOut(duration: 0.6), value: score)
                 VStack(spacing: 0) {
                     Text("\(score)")
-                        .font(.system(size: 40, weight: .bold, design: .rounded))
+                        .font(.system(size: 46, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
                     Text("posture")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 130, height: 130)
+            .frame(width: 140, height: 140)
 
             let criticals = findings.filter { $0.severity == .critical }.count
             let warnings = findings.filter { $0.severity == .warning }.count
@@ -84,13 +99,13 @@ struct SummaryCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("At a glance", systemImage: "eye")
                 .font(.headline)
-            summaryRow("lock.fill", .green,
+            summaryRow("lock.fill", Theme.green,
                        "\(store.organizations.filter { $0.vault == .locked }.count) vault(s) at rest")
             summaryRow("lock.open.fill", .orange,
                        "\(store.organizations.filter { $0.vault == .mounted }.count) mounted · exposed")
-            summaryRow("signature", .blue,
+            summaryRow("signature", Theme.accent,
                        "\(store.organizations.filter(\.signingEnabled).count)/\(store.organizations.count) orgs signing commits")
-            summaryRow("stethoscope", .secondary,
+            summaryRow("stethoscope", Theme.label3,
                        store.findings.isEmpty ? "Doctor: no findings" : "Doctor: \(store.findings.count) finding(s)")
             Spacer(minLength: 0)
         }
@@ -112,13 +127,14 @@ struct SummaryCard: View {
 struct OrgCard: View {
     @EnvironmentObject var store: AppStore
     let org: Organization
+    @State private var hovering = false
 
     private var stateColor: Color {
         switch org.vault {
         case .mounted: .orange
-        case .locked: .green
-        case .unlocked: .yellow
-        case .misplaced: .red
+        case .locked: Theme.green
+        case .unlocked: Theme.amber
+        case .misplaced: Theme.red
         case .none: .secondary
         }
     }
@@ -157,26 +173,43 @@ struct OrgCard: View {
                 chip("key.fill", org.keyLabel)
                 chip("signature", org.signingEnabled ? "signing" : "unsigned")
                 Spacer()
-                switch org.vault {
-                case .locked:
-                    Button("Mount") { store.mountTarget = org }
-                        .controlSize(.small)
-                case .mounted:
-                    Button("Eject") { Task { await store.eject(org) } }
-                        .controlSize(.small)
-                case .unlocked:
-                    Button("Secure") { Task { await store.eject(org) } }
-                        .controlSize(.small)
-                case .misplaced:
-                    Button("Relocate") { Task { await store.relocate(org) } }
-                        .controlSize(.small)
-                case .none:
-                    EmptyView()
+                if store.busyOrgs.contains(org.name) {
+                    ProgressView().controlSize(.small)
+                } else {
+                    switch org.vault {
+                    case .locked:
+                        Button("Mount") { store.mountTarget = org }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    case .mounted:
+                        Button("Clone…") { store.cloneTarget = org }
+                            .controlSize(.small)
+                        Button("Eject") { Task { await store.eject(org) } }
+                            .controlSize(.small)
+                    case .unlocked:
+                        // keys are cached: mounting needs no passphrase
+                        Button("Mount") { Task { await store.relocate(org) } }
+                            .controlSize(.small)
+                        Button("Secure") { Task { await store.eject(org) } }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.yellow)
+                            .controlSize(.small)
+                    case .misplaced:
+                        Button("Relocate") { Task { await store.relocate(org) } }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                            .controlSize(.small)
+                    case .none:
+                        EmptyView()
+                    }
                 }
             }
         }
         .padding(16)
-        .cardStyle()
+        .cardStyle(hovering: hovering)
+        .scaleEffect(hovering ? 1.015 : 1)
+        .animation(.spring(duration: 0.25), value: hovering)
+        .onHover { hovering = $0 }
     }
 
     private func chip(_ icon: String, _ text: String) -> some View {
@@ -184,8 +217,8 @@ struct OrgCard: View {
             .font(.caption2)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(Capsule().fill(.quaternary.opacity(0.5)))
-            .foregroundStyle(.secondary)
+            .background(Capsule().fill(Theme.chipFill))
+            .foregroundStyle(Theme.label2)
     }
 }
 
@@ -207,8 +240,10 @@ struct DoctorView: View {
                 List(store.findings) { finding in
                     FindingRow(finding: finding)
                 }
+                .scrollContentBackground(.hidden)
             }
         }
+        .background(Theme.bg)
         .navigationTitle("Doctor")
         .toolbar {
             Button {
@@ -228,9 +263,9 @@ struct FindingRow: View {
 
     private var severityColor: Color {
         switch finding.severity {
-        case .critical: .red
-        case .warning: .orange
-        case .info: .blue
+        case .critical: Theme.red
+        case .warning: Theme.amber
+        case .info: Theme.accent
         }
     }
 
@@ -273,19 +308,4 @@ struct FindingRow: View {
     }
 }
 
-// MARK: - Shared card styling
-
-private struct CardStyle: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
-            )
-    }
-}
-
-extension View {
-    func cardStyle() -> some View { modifier(CardStyle()) }
-}
+// (card styling lives in Theme.swift — Auger design language)

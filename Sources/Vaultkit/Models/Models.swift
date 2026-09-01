@@ -31,7 +31,7 @@ enum VaultState: String, Codable {
 /// One organization the user works for. This struct is a *view* of the real
 /// configuration on disk (gitconfig includes, ssh keys, APFS volumes) — never
 /// a competing source of truth. The Doctor re-derives it from the system.
-struct Organization: Identifiable, Codable {
+struct Organization: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var name: String                 // "wecreate"
     var displayName: String          // "WeCreate GmbH"
@@ -44,6 +44,7 @@ struct Organization: Identifiable, Codable {
     var keyLabel: String             // Secure Enclave identity label, "ssh-wecreate"
     var signingEnabled: Bool
     var vault: VaultState
+    var sshCommand: String? = nil    // the org's core.sshCommand (drives clones)
 }
 
 /// A single health check the Doctor performs, with its outcome.

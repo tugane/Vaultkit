@@ -129,6 +129,17 @@ pattern:
 explicit, minimal-scope, vault-contained, and inventoried, instead of ambient in
 `~/.npmrc` where every process can read it.
 
+## UC11 — Clone through the app
+
+**Persona:** all · **Goal:** cloning a repository can't put it in the wrong context.
+
+From an org's card (mounted vaults only): paste an SSH clone URL. The app binds
+URL → org key → vault destination by construction, checks the URL's host against
+the **pinned known_hosts** (refusing unverified hosts with an explanation — no
+trust-on-first-use after an incident), passes the org's `core.sshCommand`
+explicitly (includeIf config isn't reliably applied *during* clone), and warns
+that Touch ID will prompt. Cross-org misrouting is impossible through this path.
+
 ## Non-goals
 
 - Not an antivirus, not an EDR — the Doctor checks *configuration*, not malware.

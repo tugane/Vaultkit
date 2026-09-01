@@ -11,12 +11,15 @@ import Foundation
 /// Runs a system command and captures its output. The ONLY place Process is used.
 /// `stdin` is used exclusively for `-stdinpassphrase` (see the I1 note in data-flow.md).
 protocol SystemCommandRunning: Sendable {
-    func run(_ tool: String, _ arguments: [String], stdin: String?) async throws -> CommandResult
+    func run(_ tool: String, _ arguments: [String], stdin: String?, cwd: String?) async throws -> CommandResult
 }
 
 extension SystemCommandRunning {
     func run(_ tool: String, _ arguments: [String]) async throws -> CommandResult {
-        try await run(tool, arguments, stdin: nil)
+        try await run(tool, arguments, stdin: nil, cwd: nil)
+    }
+    func run(_ tool: String, _ arguments: [String], stdin: String?) async throws -> CommandResult {
+        try await run(tool, arguments, stdin: stdin, cwd: nil)
     }
 }
 

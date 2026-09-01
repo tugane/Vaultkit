@@ -13,12 +13,13 @@ final class ProcessRunner: SystemCommandRunning, @unchecked Sendable {
 
     /// `stdin` is written to the process and the buffer is not retained.
     /// Used exclusively for `-stdinpassphrase` (see the I1 note in data-flow.md).
-    func run(_ tool: String, _ arguments: [String], stdin: String?) async throws -> CommandResult {
+    func run(_ tool: String, _ arguments: [String], stdin: String?, cwd: String?) async throws -> CommandResult {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: tool)
                 process.arguments = arguments
+                if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
                 let outPipe = Pipe(), errPipe = Pipe()
                 process.standardOutput = outPipe

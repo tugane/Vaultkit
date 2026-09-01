@@ -9,9 +9,13 @@ final class AppStore: ObservableObject {
     @Published var selection: SidebarItem? = .dashboard
     @Published var lastError: String?
     @Published var mountTarget: Organization?    // non-nil → passphrase sheet is up
+    @Published var cloneTarget: Organization?    // non-nil → clone sheet is up
+    @Published var busyOrgs: Set<String> = []    // orgs with an action in flight
+    @Published var doctorRunning = false
 
     let vaults = DiskUtilVaultService()
     let doctor = DoctorService()
+    let git = GitService()
 
     init() {
         // Populate at launch regardless of which scene shows first — the
@@ -27,6 +31,13 @@ final class AppStore: ObservableObject {
                 Task { @MainActor in await self?.refresh() }
             }
         }
+
+        // NSWorkspace only notices /Volumes-scope mounts — canonical-path mounts
+        // (diskutil -mountpoint ~/work/<org>, i.e. work-on and our own) bypass
+        // it. A light poll keeps the cards honest; refresh is one diskutil call.
+        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refresh() }
+        }
     }
 
     /// 100 minus weighted findings: critical −25, warning −10, info −3.
@@ -38,8 +49,10 @@ final class AppStore: ObservableObject {
     }
 
     func runDoctor() async {
+        doctorRunning = true
         await refresh()
         findings = await doctor.runAllChecks(orgs: organizations)
+        doctorRunning = false
     }
 
     func applyFix(_ finding: DoctorFinding) async {
@@ -60,30 +73,51 @@ final class AppStore: ObservableObject {
     /// Usually passphrase-free (keys cached); falls back to the sheet if the
     /// keys drop during the move.
     func relocate(_ org: Organization) async {
+        busyOrgs.insert(org.name)
         do {
             try await vaults.mount(org, passphrase: "")
         } catch {
             mountTarget = org
         }
         await runDoctor()
+        busyOrgs.remove(org.name)
     }
 
     func mount(_ org: Organization, passphrase: String) async {
+        busyOrgs.insert(org.name)
         do {
             try await vaults.mount(org, passphrase: passphrase)
         } catch {
             lastError = error.localizedDescription
         }
         await runDoctor()   // mutations refresh findings too
+        busyOrgs.remove(org.name)
+    }
+
+    /// Clone into the org's mounted vault with the org's key (Touch ID prompt).
+    /// Returns true on success so the sheet can dismiss.
+    func clone(url: String, into org: Organization) async -> Bool {
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
+        do {
+            let name = try await git.clone(url: url, into: org)
+            lastError = "Cloned \(name) into \(org.folderPath) with \(org.keyLabel)."
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
     }
 
     func eject(_ org: Organization) async {
+        busyOrgs.insert(org.name)
         do {
             try await vaults.eject(org)
         } catch {
             lastError = error.localizedDescription
         }
         await runDoctor()
+        busyOrgs.remove(org.name)
     }
 }
 
@@ -113,6 +147,8 @@ struct ContentView: View {
             List(SidebarItem.allCases, selection: $store.selection) { item in
                 Label(item.rawValue, systemImage: item.icon).tag(item)
             }
+            .scrollContentBackground(.hidden)
+            .background(Theme.rail)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             switch store.selection ?? .vaults {
@@ -133,6 +169,12 @@ struct ContentView: View {
         .sheet(item: $store.mountTarget) { org in
             MountSheet(org: org)
         }
+        .sheet(item: $store.cloneTarget) { org in
+            CloneSheet(org: org)
+        }
+        // Auger's design is committed dark — the palette owns the window.
+        .preferredColorScheme(.dark)
+        .tint(Theme.accent)
     }
 }
 
@@ -153,8 +195,10 @@ struct VaultsView: View {
                 List(store.organizations) { org in
                     VaultRow(org: org)
                 }
+                .scrollContentBackground(.hidden)
             }
         }
+        .background(Theme.bg)
         .navigationTitle("Vaults")
         .toolbar {
             Button {
@@ -204,10 +248,10 @@ struct VaultRow: View {
     private var stateColor: Color {
         switch org.vault {
         case .none: .secondary
-        case .locked: .green
+        case .locked: Theme.green
         case .mounted: .orange
-        case .unlocked: .yellow
-        case .misplaced: .red
+        case .unlocked: Theme.amber
+        case .misplaced: Theme.red
         }
     }
 
@@ -223,18 +267,24 @@ struct VaultRow: View {
 
     @ViewBuilder
     private var actionButton: some View {
-        switch org.vault {
-        case .locked:
-            Button("Mount") { store.mountTarget = org }
-        case .mounted:
-            Button("Eject") { Task { await store.eject(org) } }
-        case .unlocked:
-            // eject() on an unmounted-but-unlocked volume drops the cached keys
-            Button("Secure") { Task { await store.eject(org) } }
-        case .misplaced:
-            Button("Relocate") { Task { await store.relocate(org) } }
-        case .none:
-            EmptyView()
+        if store.busyOrgs.contains(org.name) {
+            ProgressView().controlSize(.small)
+        } else {
+            switch org.vault {
+            case .locked:
+                Button("Mount") { store.mountTarget = org }
+            case .mounted:
+                Button("Clone…") { store.cloneTarget = org }
+                Button("Eject") { Task { await store.eject(org) } }
+            case .unlocked:
+                // keys cached: Mount is passphrase-free; Secure drops the keys
+                Button("Mount") { Task { await store.relocate(org) } }
+                Button("Secure") { Task { await store.eject(org) } }
+            case .misplaced:
+                Button("Relocate") { Task { await store.relocate(org) } }
+            case .none:
+                EmptyView()
+            }
         }
     }
 }
@@ -281,6 +331,77 @@ struct MountSheet: View {
     }
 }
 
+struct CloneSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let org: Organization                    // preselection (card that opened us)
+    @State private var selectedName = ""
+    @State private var url = ""
+    @State private var working = false
+
+    private var mountedOrgs: [Organization] {
+        store.organizations.filter { $0.vault == .mounted }
+    }
+    private var selected: Organization? {
+        mountedOrgs.first { $0.name == selectedName }
+    }
+    private var host: String? { GitService.host(of: url) }
+    private var pinned: Bool { host.map(GitService.isPinned) ?? false }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Clone a repository", systemImage: "square.and.arrow.down.on.square")
+                .font(.title3.weight(.semibold))
+            // Multiple vaults can be mounted — the destination is an explicit choice.
+            Picker("Into", selection: $selectedName) {
+                ForEach(mountedOrgs) { o in
+                    Text("\(o.displayName)  (\(o.folderPath))").tag(o.name)
+                }
+            }
+            .pickerStyle(.menu)
+            if let selected {
+                Text("Authenticates with \(selected.keyLabel) — expect a Touch ID prompt.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.label2)
+            }
+            TextField("git@host:org/repo.git", text: $url)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .onSubmit(submit)
+            if let host, !url.isEmpty {
+                Label(
+                    pinned ? "\(host) — host key pinned & verified" : "\(host) is NOT in known_hosts — verify and pin it before cloning",
+                    systemImage: pinned ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(pinned ? Theme.green : Theme.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button(working ? "Cloning…" : "Clone") { submit() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(url.isEmpty || !pinned || working || selected == nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 470)
+        .background(Theme.bg2)
+        .onAppear { selectedName = org.name }
+    }
+
+    private func submit() {
+        guard let selected, !url.isEmpty, pinned, !working else { return }
+        working = true
+        Task {
+            let ok = await store.clone(url: url, into: selected)
+            working = false
+            if ok { dismiss() }
+        }
+    }
+}
+
 // MARK: - Organizations panel
 
 struct OrganizationsView: View {
@@ -296,6 +417,8 @@ struct OrganizationsView: View {
             }
             .padding(.vertical, 2)
         }
+        .scrollContentBackground(.hidden)
+        .background(Theme.bg)
         .navigationTitle("Organizations")
     }
 }
