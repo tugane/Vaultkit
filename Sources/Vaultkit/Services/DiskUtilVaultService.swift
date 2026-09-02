@@ -184,7 +184,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
         // state: on a locked volume it can only fail (or prompt interactively).
         if !vol.locked {
             let m = try await runner.run(diskutil, ["mount", "-mountPoint", canonical, vol.deviceIdentifier])
-            if m.status == 0 { return }
+            if m.status == 0 { repairMountedRoot(at: canonical); return }
         }
 
         let r = try await runner.run(
@@ -199,6 +199,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
                 .first { !$0.isEmpty } ?? "unknown diskutil failure"
             throw VaultError.unlockFailed(detail)
         }
+        repairMountedRoot(at: canonical)
     }
 
     func eject(_ org: Organization) async throws {
@@ -284,13 +285,46 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     }
 
     // MARK: placeholder guard
+    //
+    // The guard exists to make the *placeholder* unwritable while a vault is
+    // locked, so nothing lands on the bare disk to be shadowed at mount time.
+    // It must never touch a mounted volume: chmod follows the path, so closing
+    // the guard over a live mount rewrites the volume ROOT's permissions, and
+    // that mode is stored inside the volume — every future mount comes back
+    // unreadable. diskutil can report a successful lock while the volume is
+    // still mounted, so "we just locked it" is not evidence enough; check.
+
+    /// True when `path` is itself a mount point (not the bare placeholder).
+    func isMountPoint(_ path: String) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return false }
+        // "/" is its own parent, so the device comparison below can't see it.
+        if (path as NSString).standardizingPath == "/" { return true }
+        let parent = (path as NSString).deletingLastPathComponent
+        guard let here = try? fm.attributesOfItem(atPath: path),
+              let up = try? fm.attributesOfItem(atPath: parent) else { return false }
+        // A different device number than the parent ⇒ a filesystem is mounted here.
+        return (here[.systemNumber] as? Int) != (up[.systemNumber] as? Int)
+    }
 
     private func openGuard(at path: String) {
-        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
+    }
+
+    /// Repair a volume root left at 0o000 by an earlier mis-aimed guard, so a
+    /// vault damaged by older builds becomes usable again on next mount.
+    private func repairMountedRoot(at path: String) {
+        let fm = FileManager.default
+        guard isMountPoint(path),
+              let attrs = try? fm.attributesOfItem(atPath: path),
+              let mode = attrs[.posixPermissions] as? NSNumber, mode.intValue == 0 else { return }
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
     }
 
     private func closeGuard(at path: String) {
+        guard !isMountPoint(path) else { return }   // never lock out a live volume
         try? FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
     }
 

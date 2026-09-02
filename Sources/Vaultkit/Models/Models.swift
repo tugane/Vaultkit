@@ -36,7 +36,7 @@ struct Organization: Identifiable, Codable, Hashable {
     var name: String                 // "wecreate"
     var displayName: String          // "WeCreate GmbH"
     var gitAuthorName: String        // "Amiel Tugane"
-    var gitEmail: String             // "amiel.tugane@wecreate.world"
+    var gitEmail: String             // "you@example.com"
     var forge: ForgeKind
     var forgeHost: String            // "github.com", "forge.rhost.rw"
     var forgeSSHPort: Int?           // nil = 22; e.g. 2222 for built-in Gitea SSH

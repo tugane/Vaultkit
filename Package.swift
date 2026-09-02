@@ -12,6 +12,11 @@ let package = Package(
             name: "Vaultkit",
             dependencies: ["TuganeDesign"],
             path: "Sources/Vaultkit"
+        ),
+        .testTarget(
+            name: "VaultkitTests",
+            dependencies: ["Vaultkit"],
+            path: "Tests/VaultkitTests"
         )
     ]
 )
