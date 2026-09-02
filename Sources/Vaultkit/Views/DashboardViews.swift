@@ -26,9 +26,6 @@ struct DashboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Dashboard") {
-                IconButton(symbol: "plus", help: "Add an organization") {
-                    store.showAddOrg = true
-                }
                 IconButton(symbol: theme == .dark ? "sun.max" : "moon",
                            help: "Switch to \(theme.toggleLabel.lowercased()) mode") {
                     themeRaw = theme.toggled.rawValue

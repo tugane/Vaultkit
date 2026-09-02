@@ -405,12 +405,6 @@ struct SidebarView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                PillButton(title: "Add Organization", role: .neutral, height: 34,
-                           hpad: 14, radius: 8,
-                           font: .system(size: 13, weight: .medium)) {
-                    store.showAddOrg = true
-                }
-                .frame(maxWidth: .infinity)
                 Divider().overlay(p.sep)
                 Text("Vaultkit 0.1\n\(plural(store.organizations.count, "organization")) · \(plural(store.exposedOrgs.count, "vault")) exposed")
                     .font(.system(size: 12))
@@ -733,13 +727,24 @@ struct OrganizationsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Organizations") { EmptyView() }
+            PageHeader(title: "Organizations") {
+                PillButton(title: "Add Organization", role: .accent, height: 32,
+                           hpad: 16, font: .system(size: 13, weight: .semibold)) {
+                    store.showAddOrg = true
+                }
+            }
             if store.organizations.isEmpty {
-                EmptyState(
-                    symbol: "person.2.badge.key",
-                    title: "No organizations found",
-                    message: "Add an includeIf block for ~/work/<org>/ to ~/.gitconfig and Vaultkit will pick it up."
-                )
+                VStack(spacing: 16) {
+                    EmptyState(
+                        symbol: "person.2.badge.key",
+                        title: "No organizations yet",
+                        message: "An organization is a Secure Enclave key, an encrypted vault, and the git rules binding them to one folder."
+                    )
+                    PillButton(title: "Add Organization", role: .accent) {
+                        store.showAddOrg = true
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     VStack(spacing: 8) {
