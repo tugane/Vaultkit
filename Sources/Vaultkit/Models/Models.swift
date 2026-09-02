@@ -45,6 +45,9 @@ struct Organization: Identifiable, Codable, Hashable {
     var signingEnabled: Bool
     var vault: VaultState
     var sshCommand: String? = nil    // the org's core.sshCommand (drives clones)
+
+    /// Reference-key file Vaultkit writes into ~/.ssh for orgs it creates.
+    var keyFileName: String { "id_sk_\(name)" }
 }
 
 /// A single health check the Doctor performs, with its outcome.

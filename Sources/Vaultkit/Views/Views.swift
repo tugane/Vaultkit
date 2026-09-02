@@ -13,10 +13,15 @@ final class AppStore: ObservableObject {
     @Published var cloneTarget: Organization?    // non-nil → clone sheet is up
     @Published var busyOrgs: Set<String> = []    // orgs with an action in flight
     @Published var doctorRunning = false
+    @Published var showAddOrg = false
+    @Published var creatingOrg: String?          // non-nil → step label, in flight
+    @Published var newKey: (org: String, key: String)?
 
     let vaults = DiskUtilVaultService()
     let doctor = DoctorService()
     let git = GitService()
+    let keys = EnclaveKeyService()
+    let gitConfig = GitConfigService()
 
     init() {
         // Populate at launch regardless of which scene shows first — the
@@ -144,6 +149,53 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// UC1/UC4 end to end: enclave key → encrypted vault → git routing.
+    /// Every step is verified before the next runs, and a failure leaves the
+    /// machine no less protected than it started (I4).
+    func createOrganization(name: String, displayName: String, authorName: String,
+                            email: String, volumeName: String, passphrase: String) async -> Bool {
+        let org = Organization(
+            name: name, displayName: displayName,
+            gitAuthorName: authorName, gitEmail: email,
+            forge: .custom, forgeHost: "", forgeSSHPort: nil,
+            folderPath: "~/work/\(name)", keyLabel: "ssh-\(name)",
+            signingEnabled: true, vault: .none
+        )
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let keyPath = "\(home)/.ssh/\(org.keyFileName)"
+
+        guard !organizations.contains(where: { $0.name == name }) else {
+            lastError = OrgCreationError.nameTaken(name).localizedDescription
+            return false
+        }
+        do {
+            creatingOrg = "Creating the Secure Enclave key — touch the sensor…"
+            if await !keys.labels().contains(org.keyLabel) {
+                try await keys.createIdentity(label: org.keyLabel)
+            }
+
+            creatingOrg = "Exporting the reference key — touch the sensor…"
+            try await keys.exportReferenceKey(label: org.keyLabel, to: keyPath)
+
+            creatingOrg = "Creating the encrypted vault…"
+            try await vaults.createVault(for: org, volumeName: volumeName, passphrase: passphrase)
+
+            creatingOrg = "Writing the git rules…"
+            try gitConfig.writeOrgConfig(org)
+            try gitConfig.addInclude(org)
+
+            creatingOrg = nil
+            await runDoctor()
+            newKey = (displayName, keys.publicKey(at: keyPath) ?? "")
+            return true
+        } catch {
+            creatingOrg = nil
+            lastError = error.localizedDescription
+            await runDoctor()
+            return false
+        }
+    }
+
     func openClone(preferring org: Organization? = nil) {
         cloneTarget = org ?? cloneableOrgs.first
     }
@@ -249,6 +301,13 @@ struct ContentView: View {
         .sheet(item: $store.cloneTarget) { org in
             CloneSheet(org: org)
         }
+        .sheet(isPresented: $store.showAddOrg) { AddOrgSheet() }
+        .sheet(isPresented: Binding(
+            get: { store.newKey != nil },
+            set: { if !$0 { store.newKey = nil } }
+        )) {
+            if let n = store.newKey { NewKeySheet(org: n.org, publicKey: n.key) }
+        }
         .tint(p.accent)
     }
 }
@@ -346,6 +405,12 @@ struct SidebarView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
+                PillButton(title: "Add Organization", role: .neutral, height: 34,
+                           hpad: 14, radius: 8,
+                           font: .system(size: 13, weight: .medium)) {
+                    store.showAddOrg = true
+                }
+                .frame(maxWidth: .infinity)
                 Divider().overlay(p.sep)
                 Text("Vaultkit 0.1\n\(plural(store.organizations.count, "organization")) · \(plural(store.exposedOrgs.count, "vault")) exposed")
                     .font(.system(size: 12))

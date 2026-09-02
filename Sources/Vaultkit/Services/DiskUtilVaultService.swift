@@ -111,10 +111,58 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     }
 
     func createVault(for org: Organization) async throws {
-        // Deliberately not automated: volume creation sets the passphrase, which
-        // must never transit the app (I1). The wizard hands the user a terminal
-        // command using -passprompt instead.
-        throw VaultError.commandFailed("Vault creation is guided, not automated — see UC4.")
+        throw VaultError.commandFailed("Use createVault(for:volumeName:passphrase:).")
+    }
+
+    /// The Mac's main APFS container — the one holding the system Data volume.
+    func primaryContainer() async throws -> String {
+        let r = try await runner.run(diskutil, ["apfs", "list", "-plist"])
+        guard r.status == 0, let data = r.stdout.data(using: .utf8),
+              let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let containers = plist["Containers"] as? [[String: Any]] else {
+            throw VaultError.commandFailed("Could not read the APFS container list.")
+        }
+        for c in containers {
+            let volumes = c["Volumes"] as? [[String: Any]] ?? []
+            let isSystem = volumes.contains { ($0["MountPoint"] as? String) == "/System/Volumes/Data" }
+            if isSystem, let ref = c["ContainerReference"] as? String { return ref }
+        }
+        guard let first = containers.first?["ContainerReference"] as? String else {
+            throw VaultError.commandFailed("No APFS container found.")
+        }
+        return first
+    }
+
+    /// Create the org's encrypted volume and mount it at its canonical path.
+    /// The passphrase transits app memory once, piped to -stdinpassphrase, and
+    /// is never persisted (documented I1 deviation — see data-flow.md).
+    func createVault(for org: Organization, volumeName: String, passphrase: String) async throws {
+        let existing = (try? await listVolumes()) ?? []
+        guard !existing.contains(where: { $0.name.lowercased() == volumeName.lowercased() }) else {
+            throw VaultError.commandFailed("A volume named \"\(volumeName)\" already exists.")
+        }
+        let container = try await primaryContainer()
+        let mountPoint = expand(org.folderPath)
+        openGuard(at: mountPoint)
+
+        let r = try await runner.run(
+            diskutil,
+            ["apfs", "addVolume", container, "APFS", volumeName,
+             "-stdinpassphrase", "-mountpoint", mountPoint],
+            stdin: passphrase
+        )
+        // diskutil prints failures to stdout and can still exit 0, so confirm
+        // against the real state rather than trusting the status code.
+        let created = (try? await listVolumes())?.contains {
+            $0.name.lowercased() == volumeName.lowercased() && $0.mountPoint == mountPoint
+        } ?? false
+        guard created else {
+            closeGuard(at: mountPoint)   // fail closed (I4)
+            let detail = [r.stderr, r.stdout]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? "diskutil did not create the volume"
+            throw VaultError.commandFailed(detail)
+        }
     }
 
     func mount(_ org: Organization, passphrase: String) async throws {
