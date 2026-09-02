@@ -93,18 +93,6 @@ struct DashboardView: View {
                 .padding(.horizontal, 40).padding(.top, 8).padding(.bottom, 32)
             }
         }
-        .background(alignment: .topTrailing) {
-            // Auger's corner glow, dialed back in light where it would smear.
-            RadialGradient(
-                colors: [p.accent.opacity(0.55 * p.glowStrength),
-                         p.accent.opacity(0.16 * p.glowStrength),
-                         .clear],
-                center: .topTrailing, startRadius: 30, endRadius: 620
-            )
-            .frame(width: 780, height: 680)
-            .blur(radius: 36)
-            .allowsHitTesting(false)
-        }
     }
 }
 
@@ -215,7 +203,7 @@ struct OrgCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            Text(org.gitEmail.isEmpty ? org.folderPath : org.gitEmail)
+            Text(detailLine(org.gitEmail.isEmpty ? org.folderPath : org.gitEmail))
                 .font(.system(size: 12.5))
                 .foregroundStyle(p.label2)
                 .lineLimit(1)

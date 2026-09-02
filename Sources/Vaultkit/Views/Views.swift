@@ -247,7 +247,7 @@ extension VaultState {
     }
 }
 
-enum SidebarItem: String, CaseIterable, Identifiable {
+enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
     case dashboard = "Dashboard"
     case organizations = "Organizations"
     case vaults = "Vaults"
@@ -263,6 +263,16 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .doctor: "stethoscope"
         }
     }
+
+    /// The page's watermark glyph — decorative, and distinct from `icon`.
+    var backdropSymbol: String {
+        switch self {
+        case .dashboard: "shield.lefthalf.filled"
+        case .organizations: "building.2.fill"
+        case .vaults: "lock.square.stack.fill"
+        case .doctor: "waveform.path.ecg"
+        }
+    }
 }
 
 struct ContentView: View {
@@ -272,11 +282,12 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             SidebarView()
-                .frame(width: 232)
+                .frame(width: 264)
                 .background(p.sidebar)
             Divider().overlay(p.sep2)
+            let page = store.selection ?? .dashboard
             Group {
-                switch store.selection ?? .dashboard {
+                switch page {
                 case .dashboard: DashboardView()
                 case .organizations: OrganizationsView()
                 case .vaults: VaultsView()
@@ -284,6 +295,10 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Animate the content only: animating the sidebar cross-fades the
+            // nav highlight and briefly lights two rows.
+            .animation(.easeInOut(duration: 0.2), value: page)
+            .background { PageBackdrop(symbol: page.backdropSymbol) }
             .background(p.content)
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -312,6 +327,15 @@ struct ContentView: View {
     }
 }
 
+/// Joins the parts of a subtitle, skipping any that are empty — an org with no
+/// org-level email (its identity may be repo-local) must not render "· key …".
+func detailLine(_ parts: String?...) -> String {
+    parts.compactMap { $0 }
+         .map { $0.trimmingCharacters(in: .whitespaces) }
+         .filter { !$0.isEmpty }
+         .joined(separator: " · ")
+}
+
 // MARK: - Page chrome (Auger: title lives in the content, not a toolbar band)
 
 struct PageHeader<Actions: View>: View {
@@ -329,7 +353,7 @@ struct PageHeader<Actions: View>: View {
         }
         .padding(.horizontal, 40)
         .padding(.top, 30)
-        .padding(.bottom, 12)
+        .padding(.bottom, 20)
     }
 }
 
@@ -421,12 +445,14 @@ struct SidebarView: View {
     }
 
     private func row(_ item: SidebarItem, chip: String?) -> some View {
-        NavRow(
+        let index = (SidebarItem.allCases.firstIndex(of: item) ?? 0) + 1
+        return NavRow(
             symbol: item.icon,
             label: item.rawValue,
             chip: chip,
             active: (store.selection ?? .dashboard) == item
         ) { store.selection = item }
+        .keyboardShortcut(KeyEquivalent(Character("\(index)")), modifiers: .command)
     }
 }
 
@@ -523,7 +549,7 @@ struct VaultRow: View {
                 // The identity line is the one element that may give way: it
                 // middle-truncates so the head and tail of the path both stay
                 // readable, rather than wrapping the row to two lines.
-                Text("\(org.folderPath) · \(org.gitEmail)")
+                Text(detailLine(org.folderPath, org.gitEmail))
                     .font(.system(size: 12.5))
                     .foregroundStyle(p.label2)
                     .lineLimit(1)
@@ -757,7 +783,8 @@ struct OrganizationsView: View {
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(org.displayName)
                                         .font(.system(size: 13.5, weight: .medium))
-                                    Text("\(org.gitEmail) · key \(org.keyLabel) · signing \(org.signingEnabled ? "on" : "off")")
+                                    Text(detailLine(org.gitEmail, "key \(org.keyLabel)",
+                                                    "signing \(org.signingEnabled ? "on" : "off")"))
                                         .font(.system(size: 12.5))
                                         .foregroundStyle(p.label2)
                                 }

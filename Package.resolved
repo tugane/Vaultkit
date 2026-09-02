@@ -5,8 +5,8 @@
       "kind" : "localSourceControl",
       "location" : "https://github.com/tugane/TuganeDesign.git",
       "state" : {
-        "revision" : "452ec100a752dbd21c6ecf260b3ef72552fb0b64",
-        "version" : "0.1.0"
+        "revision" : "643b993f2aa034a080cb7a65d603cde76b7b69e2",
+        "version" : "0.1.1"
       }
     }
   ],
