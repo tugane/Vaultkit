@@ -5,7 +5,7 @@ let package = Package(
     name: "Vaultkit",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(path: "../TuganeDesign")
+        .package(url: "https://github.com/tugane/TuganeDesign.git", from: "0.1.0")
     ],
     targets: [
         .executableTarget(

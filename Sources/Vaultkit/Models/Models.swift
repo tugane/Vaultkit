@@ -1,5 +1,10 @@
 import Foundation
 
+/// Single source of truth for the version shown in the UI and bug reports.
+enum VaultkitVersion {
+    static let current = "0.1.0"
+}
+
 /// A forge is wherever an organization hosts its git repositories.
 enum ForgeKind: String, Codable, CaseIterable, Identifiable {
     case github

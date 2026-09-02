@@ -406,7 +406,7 @@ struct SidebarView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 Divider().overlay(p.sep)
-                Text("Vaultkit 0.1\n\(plural(store.organizations.count, "organization")) · \(plural(store.exposedOrgs.count, "vault")) exposed")
+                Text("Vaultkit \(VaultkitVersion.current)\n\(plural(store.organizations.count, "organization")) · \(plural(store.exposedOrgs.count, "vault")) exposed")
                     .font(.system(size: 12))
                     .foregroundStyle(p.label3)
                     .lineSpacing(3)

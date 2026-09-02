@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build
+        run: swift build -v
+
+      # The Swift Testing helper can fail to load a suite of only XCTest cases
+      # and take the exit code with it, so assert on the reported results.
+      - name: Test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log || true
+          if grep -qE "Executed [0-9]+ tests, with 0 failures" test.log; then
+            grep -E "Executed [0-9]+ tests" test.log | tail -1
+          else
+            echo "::error::tests failed"
+            tail -40 test.log
+            exit 1
+          fi
