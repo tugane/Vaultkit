@@ -46,6 +46,20 @@ able to audit a tool like this, and so should anyone you hand a fork to.
 - Full Xcode 15+ — the Command Line Tools alone lack the SwiftUI macro plugin
 - Git 2.34+ for SSH commit signing
 
+## Install
+
+Download the notarized DMG from [Releases](https://github.com/tugane/Vaultkit/releases),
+or build from source below. Each release publishes the DMG's SHA-256 so you can check
+what you downloaded:
+
+```bash
+shasum -a 256 ~/Downloads/Vaultkit.dmg
+```
+
+Building it yourself is the higher-assurance option, and the one this project is
+designed around — see [SECURITY.md](SECURITY.md) for what a signature does and does
+not prove.
+
 ## Build
 
 ```bash

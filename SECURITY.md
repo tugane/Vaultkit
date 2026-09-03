@@ -94,7 +94,18 @@ Doctor checks Time Machine), and enable required-signature and protected-branch 
 your forges so tampered history is rejected server-side rather than merely flagged
 locally.
 
-## Reproducibility
+## What a release signature does and does not prove
 
-Vaultkit is distributed as source. There are no signed binaries to trust and no update
-channel that could ship you something different from what you read.
+Releases are distributed as a notarized DMG signed with a Developer ID certificate, and
+each release publishes the DMG's SHA-256. That proves the build came from the holder of
+that certificate and has not been altered in transit — it does **not** prove the binary
+was built from the source in this repository. No signature can.
+
+Building from source remains fully supported and is the higher-assurance path:
+
+```bash
+swift build -c release
+```
+
+There is no auto-update channel. Vaultkit never checks for, downloads, or installs
+anything; a new version only ever arrives because you fetched it deliberately.
