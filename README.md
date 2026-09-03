@@ -69,6 +69,18 @@ swift build
 swift run
 ```
 
+To install it as a real app in `/Applications` rather than running it from the
+command line:
+
+```bash
+scripts/install-local.sh
+```
+
+That builds release, generates the icon, signs the bundle ad-hoc and installs
+it. Ad-hoc means the signature is valid on the machine that built it and
+nowhere else — fine for your own use, and it is why the notarized DMG exists
+for everyone else.
+
 To develop against a local checkout of the design package:
 
 ```bash

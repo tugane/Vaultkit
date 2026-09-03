@@ -51,6 +51,7 @@ swift build -c release --disable-sandbox > release/build.log 2>&1
 cp "$(swift build -c release --show-bin-path)/Vaultkit" "$APP/Contents/MacOS/Vaultkit"
 
 echo "==> assemble the bundle"
+scripts/make-icon.sh "$APP/Contents/Resources/Vaultkit.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -59,6 +60,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key><string>Vaultkit</string>
     <key>CFBundleDisplayName</key><string>Vaultkit</string>
     <key>CFBundleExecutable</key><string>Vaultkit</string>
+    <key>CFBundleIconFile</key><string>Vaultkit</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
