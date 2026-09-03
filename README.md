@@ -63,6 +63,10 @@ To develop against a local checkout of the design package:
 swift package edit TuganeDesign --path ../TuganeDesign
 ```
 
+Use `swift package edit`, not a SwiftPM mirror: a mirror rewrites
+`Package.resolved` to `kind: localSourceControl`, which then fails to resolve
+anywhere but your machine. Run `swift package unedit TuganeDesign` when done.
+
 ## How it is arranged
 
 Vaultkit invents no database. The system is the source of truth:
