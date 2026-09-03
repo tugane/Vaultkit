@@ -47,7 +47,7 @@ struct AddOrgSheet: View {
                 field("Display name", "Acme Inc", $displayName)
             }
             HStack(spacing: 12) {
-                field("Your name", "Amiel Tugane", $authorName)
+                field("Your name", "Ada Lovelace", $authorName)
                 field("Email for this org", "you@acme.com", $email)
             }
 

@@ -6,8 +6,6 @@ Vaultkit gives each organization you work for its own compartment — a Secure E
 SSH key, an encrypted volume, and git rules binding identity, key and signing to that
 folder — then watches for those compartments drifting away from their guarantees.
 
-![Vaultkit dashboard](docs/images/dashboard-dark.png)
-
 ## Why
 
 If you have an employer, run your own company, and keep side projects, one Mac holds

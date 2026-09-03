@@ -43,7 +43,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
 
     struct VolumeInfo {
         let deviceIdentifier: String   // "disk3s7"
-        let name: String               // "WeCreate"
+        let name: String               // "Acme"
         let locked: Bool               // false while keys are cached, even if unmounted
         let mountPoint: String?        // nil when not mounted
     }

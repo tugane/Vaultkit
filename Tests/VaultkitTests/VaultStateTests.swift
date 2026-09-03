@@ -118,8 +118,8 @@ final class VaultStateTests: XCTestCase {
         let service = DiskUtilVaultService(runner: runner)
 
         _ = await service.states(for: [org("me", folder: "~/work/me"),
-                                       org("rmsoft", folder: "~/work/rmsoft"),
-                                       org("hup", folder: "~/work/hup")])
+                                       org("globex", folder: "~/work/globex"),
+                                       org("initech", folder: "~/work/initech")])
         let listCalls = runner.calls.filter { $0.joined(separator: " ").contains("apfs list") }
         XCTAssertEqual(listCalls.count, 1)
     }

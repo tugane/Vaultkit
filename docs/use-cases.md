@@ -67,8 +67,8 @@ Same as UC1 minus first-run setup; additionally verifies **cross-org isolation**
 ## UC5 — Daily vault lifecycle (menu bar)
 
 - Mount/eject any org from the menu bar; states: none / locked / **mounted (exposed)** / busy.
-- Eject dissent handling: name user-level holders ("Terminal tab in ~/work/rmsoft", "VS Code window"); recognize **root-level holders** (Spotlight indexing, antivirus scan) that user tools can't see — auto-retry with backoff instead of failing cryptically (I4).
-- Optional nudges: "WeCreate has been mounted for 6h — still using it?"; "You're about to run an installer with 2 vaults mounted — eject first?"
+- Eject dissent handling: name user-level holders ("Terminal tab in ~/work/globex", "VS Code window"); recognize **root-level holders** (Spotlight indexing, antivirus scan) that user tools can't see — auto-retry with backoff instead of failing cryptically (I4).
+- Optional nudges: "Acme has been mounted for 6h — still using it?"; "You're about to run an installer with 2 vaults mounted — eject first?"
 
 ## UC6 — Doctor (drift detection)
 

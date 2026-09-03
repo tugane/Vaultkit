@@ -112,10 +112,10 @@ sequenceDiagram
     participant S as diskutil
     participant OS as macOS dialog
 
-    U->>M: Mount rmsoft
+    U->>M: Mount globex
     M->>V: mount(org)
     V->>V: open placeholder guard (chmod 700)
-    V->>S: apfs unlockVolume -mountpoint ~/work/rmsoft
+    V->>S: apfs unlockVolume -mountpoint ~/work/globex
     S->>OS: passphrase prompt (system-owned)
     U->>OS: passphrase (never seen by app)
     alt unlock succeeds
@@ -126,12 +126,12 @@ sequenceDiagram
         V-->>M: state = locked
     end
 
-    U->>M: Eject rmsoft
+    U->>M: Eject globex
     M->>V: eject(org)
     V->>S: apfs lockVolume
     alt dissenters (user-level)
         V->>V: lsof → name holders
-        V-->>U: "Terminal tab in ~/work/rmsoft" — close & retry
+        V-->>U: "Terminal tab in ~/work/globex" — close & retry
     else dissenters (root-level: Spotlight/AV)
         V->>V: empty lsof + lock failure ⇒ infer root holder
         V->>S: retry with backoff, fall back to unmount

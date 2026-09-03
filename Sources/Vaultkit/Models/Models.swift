@@ -38,15 +38,15 @@ enum VaultState: String, Codable {
 /// a competing source of truth. The Doctor re-derives it from the system.
 struct Organization: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
-    var name: String                 // "wecreate"
-    var displayName: String          // "WeCreate GmbH"
-    var gitAuthorName: String        // "Amiel Tugane"
+    var name: String                 // "acme"
+    var displayName: String          // "Acme GmbH"
+    var gitAuthorName: String        // "Ada Lovelace"
     var gitEmail: String             // "you@example.com"
     var forge: ForgeKind
     var forgeHost: String            // "github.com", "forge.rhost.rw"
     var forgeSSHPort: Int?           // nil = 22; e.g. 2222 for built-in Gitea SSH
-    var folderPath: String           // "~/work/wecreate"
-    var keyLabel: String             // Secure Enclave identity label, "ssh-wecreate"
+    var folderPath: String           // "~/work/acme"
+    var keyLabel: String             // Secure Enclave identity label, "ssh-acme"
     var signingEnabled: Bool
     var vault: VaultState
     var sshCommand: String? = nil    // the org's core.sshCommand (drives clones)
