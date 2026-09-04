@@ -33,10 +33,38 @@ enum VaultError: LocalizedError {
 ///    when lsof sees nothing, infer a root-level holder, back off and retry
 final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     private let runner: any SystemCommandRunning
+    private let mountTable: @Sendable () -> [String: String]
     private let diskutil = "/usr/sbin/diskutil"
 
-    init(runner: any SystemCommandRunning = ProcessRunner()) {
+    /// `mountTable` maps device paths ("/dev/disk3s9") to mount points. The
+    /// default reads the kernel; tests inject a fixed one.
+    init(runner: any SystemCommandRunning = ProcessRunner(),
+         mountTable: @escaping @Sendable () -> [String: String] = DiskUtilVaultService.kernelMountTable) {
         self.runner = runner
+        self.mountTable = mountTable
+    }
+
+    /// The kernel's own mount table, one syscall. Needed because
+    /// `diskutil apfs list -plist` omits MountPoint for a volume mounted
+    /// anywhere but /Volumes — exactly where every vault lives — while its
+    /// text output and `diskutil info` both report it. Snapshot mounts carry
+    /// a "…@/dev/diskN" source and so never collide with the bare device key.
+    static func kernelMountTable() -> [String: String] {
+        var buf: UnsafeMutablePointer<statfs>? = nil
+        let n = getmntinfo(&buf, MNT_NOWAIT)      // buffer is libc-owned; never freed
+        guard let buf, n > 0 else { return [:] }
+        var table: [String: String] = [:]
+        for i in 0..<Int(n) {
+            var fs = buf[i]
+            let from = withUnsafePointer(to: &fs.f_mntfromname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            let on = withUnsafePointer(to: &fs.f_mntonname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            table[from] = on
+        }
+        return table
     }
 
     // MARK: volume inventory
@@ -57,17 +85,20 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
               let containers = plist["Containers"] as? [[String: Any]] else {
             throw VaultError.commandFailed("Unexpected diskutil plist shape")
         }
+        let mounts = mountTable()
         var volumes: [VolumeInfo] = []
         for container in containers {
             for vol in container["Volumes"] as? [[String: Any]] ?? [] {
                 guard let dev = vol["DeviceIdentifier"] as? String,
                       let name = vol["Name"] as? String else { continue }
+                // The kernel fills in what the plist leaves out (see above).
                 let mountPoint = (vol["MountPoint"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                // "Locked" is authoritative when present; otherwise a mounted
-                // volume is necessarily unlocked, and only FileVault volumes
+                    ?? mounts["/dev/\(dev)"]
+                // A mounted volume is necessarily unlocked. Otherwise "Locked"
+                // is authoritative when present, and only FileVault volumes
                 // can be locked at all.
-                let locked = (vol["Locked"] as? Bool)
-                    ?? (mountPoint == nil && ((vol["FileVault"] as? Bool) ?? false))
+                let locked = mountPoint != nil ? false
+                    : ((vol["Locked"] as? Bool) ?? ((vol["FileVault"] as? Bool) ?? false))
                 volumes.append(VolumeInfo(
                     deviceIdentifier: dev,
                     name: name,

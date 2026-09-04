@@ -209,7 +209,7 @@ final class OrgRemovalTests: XCTestCase {
     func testDeleteVaultIsOnlyBelievedWhenTheVolumeIsGone() async {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Acme", locked: true, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
         let org = Organization(name: "acme", displayName: "Acme", gitAuthorName: "A", gitEmail: "a@x",
                                forge: .custom, forgeHost: "", forgeSSHPort: nil, folderPath: "~/work/acme",
                                keyLabel: "ssh-acme", signingEnabled: true, vault: .locked)
@@ -224,7 +224,7 @@ final class OrgRemovalTests: XCTestCase {
     func testDeleteVaultRefusesWhileMounted() async {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Acme", locked: false, mountPoint: "/Volumes/Acme"))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
         let org = Organization(name: "acme", displayName: "Acme", gitAuthorName: "A", gitEmail: "a@x",
                                forge: .custom, forgeHost: "", forgeSSHPort: nil, folderPath: "~/work/acme",
                                keyLabel: "ssh-acme", signingEnabled: true, vault: .misplaced)

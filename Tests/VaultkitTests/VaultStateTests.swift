@@ -52,7 +52,7 @@ final class VaultStateTests: XCTestCase {
     func testUnmountedButUnlockedIsNotReportedAsAtRest() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: false, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         let state = try await service.state(of: org("me", folder: "~/work/me"))
         XCTAssertEqual(state, .unlocked, "cached keys must never be shown as locked/at-rest")
@@ -61,7 +61,7 @@ final class VaultStateTests: XCTestCase {
     func testLockedVolumeIsAtRest() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: true, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         let state = try await service.state(of: org("me", folder: "~/work/me"))
         XCTAssertEqual(state, .locked)
@@ -72,7 +72,7 @@ final class VaultStateTests: XCTestCase {
     func testMountedAtWrongPathIsMisplaced() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: false, mountPoint: "/Volumes/Me"))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         let state = try await service.state(of: org("me", folder: "~/work/me"))
         XCTAssertEqual(state, .misplaced)
@@ -83,16 +83,38 @@ final class VaultStateTests: XCTestCase {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: false,
                                                            mountPoint: "\(home)/work/me"))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         let state = try await service.state(of: org("me", folder: "~/work/me"))
         XCTAssertEqual(state, .mounted)
     }
 
+    /// diskutil's plist omits MountPoint for anything mounted outside /Volumes,
+    /// which is every vault. The kernel's mount table is the tie-breaker — and
+    /// it must never turn a plain unmounted volume into a mounted one.
+    func testKernelMountTableFillsInWhatDiskutilOmits() async throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let runner = FakeRunner()
+        runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: false, mountPoint: nil))]
+
+        let canonical = DiskUtilVaultService(runner: runner, mountTable: { ["/dev/disk3s7": "\(home)/work/me"] })
+        let s1 = try await canonical.state(of: org("me", folder: "~/work/me"))
+        XCTAssertEqual(s1, .mounted)
+
+        let elsewhere = DiskUtilVaultService(runner: runner, mountTable: { ["/dev/disk3s7": "/Volumes/Me"] })
+        let s2 = try await elsewhere.state(of: org("me", folder: "~/work/me"))
+        XCTAssertEqual(s2, .misplaced)
+
+        // A snapshot mount of the same device must not count as the volume.
+        let snapshot = DiskUtilVaultService(runner: runner, mountTable: { ["com.apple.TimeMachine.2026@/dev/disk3s7": "/Volumes/.timemachine/x"] })
+        let s3 = try await snapshot.state(of: org("me", folder: "~/work/me"))
+        XCTAssertEqual(s3, .unlocked)
+    }
+
     func testMissingVolumeMeansNoVault() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Somebody", locked: true, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         let state = try await service.state(of: org("me", folder: "~/work/me"))
         XCTAssertEqual(state, VaultState.none)
@@ -103,7 +125,7 @@ final class VaultStateTests: XCTestCase {
     func testEjectLocksAnUnmountedButUnlockedVolume() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: false, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         // The post-lock verification can't succeed against a static fake, so the
         // call is expected to throw — what matters is that it TRIED to lock.
@@ -115,7 +137,7 @@ final class VaultStateTests: XCTestCase {
     func testStatesForManyOrgsIssuesASingleDiskutilCall() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: true, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         _ = await service.states(for: [org("me", folder: "~/work/me"),
                                        org("globex", folder: "~/work/globex"),
@@ -145,7 +167,7 @@ final class GuardSafetyTests: XCTestCase {
     func testGuardClosesOverAPlainPlaceholder() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Guard", locked: true, mountPoint: nil))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         _ = try? await service.eject(org("guard", folder: root))
         let mode = try FileManager.default.attributesOfItem(atPath: root)[.posixPermissions] as? NSNumber
@@ -157,7 +179,7 @@ final class GuardSafetyTests: XCTestCase {
     /// old path-blind guard this distinction did not exist, and closing over a
     /// mounted vault rewrote its root mode permanently.
     func testMountPointsAreDistinguishedFromPlaceholders() {
-        let service = DiskUtilVaultService(runner: FakeRunner())
+        let service = DiskUtilVaultService(runner: FakeRunner(), mountTable: { [:] })
 
         XCTAssertTrue(service.isMountPoint("/"), "the root filesystem is a mount point")
         XCTAssertFalse(service.isMountPoint(root),
@@ -171,7 +193,7 @@ final class GuardSafetyTests: XCTestCase {
     func testGuardLeavesAMountedVaultReadable() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Live", locked: false, mountPoint: "/"))]
-        let service = DiskUtilVaultService(runner: runner)
+        let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         _ = try? await service.eject(org("live", folder: "/"))
         let mode = try FileManager.default.attributesOfItem(atPath: "/")[.posixPermissions] as? NSNumber
