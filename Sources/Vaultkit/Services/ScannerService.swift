@@ -86,13 +86,20 @@ enum PolinRiderIndicators {
 
 /// Watches every mounted vault for the campaign's indicators (UC12).
 ///
-/// Read-only by construction: it opens files and matches bytes, never edits a
-/// repository. Incremental between ticks — a file is re-read only if its
+/// The scan itself only reads: it opens files and matches bytes. Acting on a
+/// hit is a separate, logged step (QuarantineService). Incremental between ticks — a file is re-read only if its
 /// content *or inode* changed since the vault's last pass. Change detection is
 /// on ctime as well as mtime because the campaign's own propagation script
 /// rewinds the clock to forge timestamps: mtime can be set from user space,
 /// ctime cannot.
 actor ScannerService {
+
+    struct OrgSummary: Sendable, Hashable {
+        let name: String
+        let repos: Int
+        let files: Int
+        let findings: Int
+    }
 
     struct Report: Sendable {
         var startedAt: Date
@@ -100,9 +107,12 @@ actor ScannerService {
         var filesScanned: Int
         var reposSeen: Int
         var orgsScanned: [String]
+        var orgs: [OrgSummary]
         var full: Bool                    // at least one org got a first/full pass
         var deep: Bool
         var indicatorVersion: String { PolinRiderIndicators.version }
+        var duration: TimeInterval { finishedAt.timeIntervalSince(startedAt) }
+        var mode: String { deep ? "deep" : full ? "full" : "changed files" }
     }
 
     /// Directories never descended into. node_modules is checked for the
@@ -111,6 +121,7 @@ actor ScannerService {
         ".git", "node_modules", ".build", "build", "dist", "out", ".next", ".nuxt",
         ".svelte-kit", ".cache", ".turbo", ".parcel-cache", "coverage", ".pnpm-store",
         "Pods", "DerivedData", ".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems",
+        ".vaultkit",                      // our own quarantine — never rescan it
     ]
 
     /// Largest file the byte matcher will read. Config files are kilobytes;
@@ -134,6 +145,7 @@ actor ScannerService {
     func scan(orgs: [Organization], deep: Bool = false) -> (Report, [ScanFinding]) {
         let start = Date()
         var files = 0, repos = 0, scanned: [String] = [], full = false
+        var summaries: [OrgSummary] = []
 
         let mounted = Set(orgs.filter { $0.vault == .mounted }.map(\.name))
         for name in Array(findings.keys) where !mounted.contains(name) {
@@ -155,10 +167,12 @@ actor ScannerService {
             kept.removeAll { result.touched.contains($0.path) || !fm.fileExists(atPath: $0.absolutePath) }
             findings[org.name] = kept + result.findings
             baseline[org.name] = start
+            summaries.append(OrgSummary(name: org.name, repos: result.repos, files: result.files,
+                                        findings: findings[org.name]?.count ?? 0))
         }
 
         let report = Report(startedAt: start, finishedAt: Date(), filesScanned: files,
-                            reposSeen: repos, orgsScanned: scanned, full: full, deep: deep)
+                            reposSeen: repos, orgsScanned: scanned, orgs: summaries, full: full, deep: deep)
         return (report, currentFindings())
     }
 
@@ -273,37 +287,39 @@ actor ScannerService {
     private func check(_ url: URL, kind: FileKind, size: Int, org: Organization,
                        repo: String, rel: String) -> [ScanFinding] {
         func finding(_ indicator: String, _ severity: DoctorFinding.Severity,
-                     _ evidence: String, _ remediation: String) -> ScanFinding {
+                     _ evidence: String, _ remediation: String,
+                     fix: ScanFinding.Fix = .manual) -> ScanFinding {
             ScanFinding(orgName: org.name, repo: repo, path: rel, absolutePath: url.path,
                         indicator: indicator, severity: severity, evidence: evidence,
-                        remediation: remediation)
+                        remediation: remediation, fix: fix)
         }
 
         switch kind {
         case .batch:
             let name = url.lastPathComponent
             if name == "temp_auto_push.bat" {
-                return [finding("PolinRider propagation script", .critical, name, Remedy.propagation)]
+                return [finding("PolinRider propagation script", .critical, name, Remedy.propagation, fix: .quarantine)]
             }
             if name == "config.bat" {
-                return [finding("PolinRider orchestrator script", .critical, name, Remedy.propagation)]
+                return [finding("PolinRider orchestrator script", .critical, name, Remedy.propagation, fix: .quarantine)]
             }
             guard let data = read(url, size: size) else { return [] }
             if data.contains("LAST_COMMIT_DATE"), data.contains("--amend") {
                 return [finding("Commit-amending batch script (PolinRider pattern)", .critical,
-                                "LAST_COMMIT_DATE + --amend", Remedy.propagation)]
+                                "LAST_COMMIT_DATE + --amend", Remedy.propagation, fix: .quarantine)]
             }
             return []
 
         case .gitignore:
             guard let data = read(url, size: size), let text = String(data: data, encoding: .utf8) else { return [] }
             let injected = text.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "config.bat" }
-            return injected ? [finding("Injected .gitignore entry", .warning, "config.bat", Remedy.gitignore)] : []
+            return injected ? [finding("Injected .gitignore entry", .warning, "config.bat", Remedy.gitignore,
+                                       fix: .dropGitignoreLine)] : []
 
         case .packageJSON:
             guard let data = read(url, size: size) else { return [] }
             return maliciousDependencies(in: data).map {
-                finding("Malicious npm dependency", .critical, $0, Remedy.dependency)
+                finding("Malicious npm dependency", .critical, $0, Remedy.dependency, fix: .dropDependency($0))
             }
 
         case .tasksJSON:
@@ -311,9 +327,10 @@ actor ScannerService {
             var out: [ScanFinding] = []
             if data.contains(PolinRiderIndicators.stakingGameUUID) {
                 out.append(finding("StakingGame take-home template", .critical,
-                                   "projectInfo.uuid \(PolinRiderIndicators.stakingGameUUID)", Remedy.tasks))
+                                   "projectInfo.uuid \(PolinRiderIndicators.stakingGameUUID)", Remedy.tasks,
+                                   fix: .quarantine))
             }
-            out += c2Hits(in: data).map { finding($0.name, .critical, $0.text, Remedy.tasks) }
+            out += c2Hits(in: data).map { finding($0.name, .critical, $0.text, Remedy.tasks, fix: .quarantine) }
             if out.isEmpty, data.contains("folderOpen"),
                ["curl ", "wget ", "| bash", "| sh", "Invoke-WebRequest", "powershell"].contains(where: data.contains) {
                 out.append(finding("VS Code task fetches and runs code on folder open", .warning,
@@ -330,14 +347,15 @@ actor ScannerService {
             if isFont { return [] }
             let looksLikeJS = ["global[", "require(", "function", "eval("].contains { head.contains($0) }
             return looksLikeJS
-                ? [finding("JavaScript hidden in a font file", .critical, "no WOFF magic; script text", Remedy.font)]
+                ? [finding("JavaScript hidden in a font file", .critical, "no WOFF magic; script text", Remedy.font,
+                           fix: .quarantine)]
                 : [finding("Font file that is not a font", .warning, "no WOFF magic", Remedy.font)]
 
         case .config, .source:
             guard let data = read(url, size: size) else { return [] }
             var out: [ScanFinding] = []
-            out += payloadHits(in: data).map { finding($0.name, .critical, $0.text, Remedy.payload) }
-            out += c2Hits(in: data).map { finding($0.name, .critical, $0.text, Remedy.payload) }
+            out += payloadHits(in: data).map { finding($0.name, .critical, $0.text, Remedy.payload, fix: .clean) }
+            out += c2Hits(in: data).map { finding($0.name, .critical, $0.text, Remedy.payload, fix: .clean) }
             return out
         }
     }
@@ -388,7 +406,7 @@ actor ScannerService {
                         path: String(nodeModules.path.dropFirst(root.count + 1)) + "/" + pkg,
                         absolutePath: nodeModules.path + "/" + pkg,
                         indicator: "Malicious npm package installed", severity: .critical,
-                        evidence: pkg, remediation: Remedy.dependency)
+                        evidence: pkg, remediation: Remedy.dependency, fix: .quarantine)
         }
     }
 
@@ -415,7 +433,7 @@ actor ScannerService {
 /// What to do about each class of hit — OSM's remediation, in the order that
 /// matters. Vaultkit never edits repository files itself.
 enum Remedy {
-    static let payload = "Delete everything appended after the legitimate config (from the injected global[…] line to the end of the file). Check the last commits for an amend that carried it, and rotate every secret that was in the environment during a build."
+    static let payload = "Delete everything appended after the legitimate config, from the injected line that starts with global[ to the end of the file. Check the last commits for an amend that carried it, and rotate every secret that was in the environment during a build."
     static let propagation = "Direct evidence of compromise even if the payload was cleaned. Delete it, rotate credentials, inspect the reflog for amended commits, and check global npm packages and editor extensions for the dropper."
     static let gitignore = "Remove the config.bat line — the malware adds it to keep its orchestrator out of diffs."
     static let dependency = "Remove the package, delete node_modules and the lockfile entry, and treat any machine that ever installed it as compromised."

@@ -1,5 +1,6 @@
 import SwiftUI
 import TuganeDesign
+import UserNotifications
 
 /// App-wide observable state. Derived from the system via services (I2);
 /// this object only caches.
@@ -23,6 +24,13 @@ final class AppStore: ObservableObject {
     @Published var removeTarget: Organization?   // non-nil → removal sheet is up
     @Published var removingOrg: String?          // non-nil → step label, in flight
     @Published var receipt: RemovalReceipt?
+    @Published var history = ScannerHistory()
+    @Published var quarantine: [QuarantineItem] = []
+    /// Act on critical hits the moment they are found. Warnings are never
+    /// auto-actioned; a fix for those is a button.
+    @Published var autoQuarantine = UserDefaults.standard.object(forKey: "vk.scanner.autoQuarantine") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoQuarantine, forKey: "vk.scanner.autoQuarantine") }
+    }
 
     /// How often mounted vaults are re-checked for changed files.
     static let scanInterval: TimeInterval = 300
@@ -30,12 +38,16 @@ final class AppStore: ObservableObject {
 
     let vaults = DiskUtilVaultService()
     let scanner = ScannerService()
+    let quarantineService = QuarantineService()
+    let historyStore = HistoryStore()
     let doctor = DoctorService()
     let git = GitService()
     let keys = EnclaveKeyService()
     let gitConfig = GitConfigService()
 
     init() {
+        history = historyStore.load()
+
         // Populate at launch regardless of which scene shows first — the
         // menu-bar extra must not depend on the main window ever opening.
         Task { await runDoctor() }
@@ -89,14 +101,118 @@ final class AppStore: ObservableObject {
 
     var compromiseIndicators: Int { scanFindings.filter { $0.severity == .critical }.count }
 
+    /// One pass, then — with auto-quarantine on — act on every critical hit
+    /// and re-read what was touched, so the list shows the state *after* the
+    /// fixes. The history records what was found and what was done.
     func runScan(deep: Bool = false) async {
         guard !scanRunning else { return }
         scanRunning = true
-        let (report, hits) = await scanner.scan(orgs: organizations, deep: deep)
+        let orgs = organizations
+        let (report, found) = await scanner.scan(orgs: orgs, deep: deep)
+        var hits = found
+        var actions: [ActionEvent] = []
+
+        if autoQuarantine {
+            for f in found where f.severity == .critical && f.fix != .manual {
+                actions.append(act(on: f, in: orgs))
+            }
+            if !actions.isEmpty {
+                hits = await scanner.scan(orgs: orgs, deep: false).1
+            }
+        }
+
         scanReport = report
         scanFindings = hits
+        history.scans.insert(ScanEvent(date: report.startedAt, duration: report.duration, mode: report.mode,
+                                       orgs: report.orgsScanned, repos: report.reposSeen,
+                                       files: report.filesScanned, hits: found.count), at: 0)
+        history.actions.insert(contentsOf: actions, at: 0)
+        historyStore.save(history)
+        reloadQuarantine()
+
+        if !found.isEmpty {
+            let neutralized = actions.filter { $0.kind == .cleaned || $0.kind == .quarantined }.count
+            notify(title: neutralized > 0
+                       ? "Vaultkit neutralized \(plural(neutralized, "PolinRider hit"))"
+                       : "Vaultkit found \(plural(found.count, "PolinRider indicator"))",
+                   body: found.prefix(3).map { "\($0.repo): \($0.path)" }.joined(separator: "\n"))
+        }
         nextScanAt = Date().addingTimeInterval(Self.scanInterval)
         scanRunning = false
+    }
+
+    /// Apply a finding's fix and say what happened. Never throws: a failure
+    /// is a `.manual` action with the reason, so the history stays complete.
+    private func act(on f: ScanFinding, in orgs: [Organization]) -> ActionEvent {
+        guard let org = orgs.first(where: { $0.name == f.orgName }) else {
+            return ActionEvent(date: Date(), kind: .manual, orgName: f.orgName, path: f.path,
+                               indicator: f.indicator, detail: "Organization no longer known.")
+        }
+        let root = (org.folderPath as NSString).expandingTildeInPath
+        do {
+            return try quarantineService.remediate(f, vaultRoot: root).0
+        } catch {
+            return ActionEvent(date: Date(), kind: .manual, orgName: f.orgName, path: f.path,
+                               indicator: f.indicator, detail: error.localizedDescription)
+        }
+    }
+
+    /// The Fix button: warnings, or criticals while auto-quarantine is off.
+    func fix(_ f: ScanFinding) async {
+        let action = act(on: f, in: organizations)
+        history.actions.insert(action, at: 0)
+        historyStore.save(history)
+        if action.kind == .manual { lastError = action.detail }
+        await runScan()
+    }
+
+    func reloadQuarantine() {
+        quarantine = organizations.filter { $0.vault == .mounted }
+            .flatMap { quarantineService.items(in: ($0.folderPath as NSString).expandingTildeInPath) }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Puts the held bytes back. Deliberately does not rescan: with
+    /// auto-quarantine on, the next pass will take an infected original again,
+    /// and the Quarantine tab says so.
+    func restore(_ item: QuarantineItem) {
+        guard let org = organizations.first(where: { $0.name == item.orgName }) else { return }
+        let root = (org.folderPath as NSString).expandingTildeInPath
+        do {
+            history.actions.insert(try quarantineService.restore(item, vaultRoot: root), at: 0)
+        } catch {
+            lastError = error.localizedDescription
+        }
+        historyStore.save(history)
+        reloadQuarantine()
+    }
+
+    func purge(_ item: QuarantineItem) {
+        guard let org = organizations.first(where: { $0.name == item.orgName }) else { return }
+        let root = (org.folderPath as NSString).expandingTildeInPath
+        do {
+            history.actions.insert(try quarantineService.purge(item, vaultRoot: root), at: 0)
+        } catch {
+            lastError = error.localizedDescription
+        }
+        historyStore.save(history)
+        reloadQuarantine()
+    }
+
+    /// A system notification, the way an antivirus tells you it did something.
+    /// A bare `swift run` binary has no bundle to register with the
+    /// notification centre and would crash on it, so it is skipped there.
+    private func notify(title: String, body: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        }
     }
 
     func runDoctor() async {
@@ -213,18 +329,18 @@ final class AppStore: ObservableObject {
             return false
         }
         do {
-            creatingOrg = "Creating the Secure Enclave key — touch the sensor…"
+            creatingOrg = "Creating the Secure Enclave key — touch the sensor"
             if await !keys.labels().contains(org.keyLabel) {
                 try await keys.createIdentity(label: org.keyLabel)
             }
 
-            creatingOrg = "Exporting the reference key — touch the sensor…"
+            creatingOrg = "Exporting the reference key — touch the sensor"
             try await keys.exportReferenceKey(label: org.keyLabel, to: keyPath)
 
-            creatingOrg = "Creating the encrypted vault…"
+            creatingOrg = "Creating the encrypted vault"
             try await vaults.createVault(for: org, volumeName: volumeName, passphrase: passphrase)
 
-            creatingOrg = "Writing the git rules…"
+            creatingOrg = "Writing the git rules"
             try gitConfig.writeOrgConfig(org)
             try gitConfig.addInclude(org)
 
@@ -258,20 +374,20 @@ final class AppStore: ObservableObject {
         do {
             if deleteVault, org.vault != .none {
                 if org.vault != .locked {
-                    removingOrg = "Ejecting the vault…"
+                    removingOrg = "Ejecting the vault"
                     try await vaults.eject(org)
                 }
-                removingOrg = "Deleting the vault…"
+                removingOrg = "Deleting the vault"
                 try await vaults.deleteVault(for: org)
                 done.append("Deleted the encrypted volume and its contents.")
             }
 
-            removingOrg = "Removing the git rules…"
+            removingOrg = "Removing the git rules"
             try gitConfig.removeOrganization(org)
             done.append("Removed the includeIf rules and ~/.gitconfig-\(org.name).")
 
             if deleteKey {
-                removingOrg = "Deleting the Secure Enclave key…"
+                removingOrg = "Deleting the Secure Enclave key"
                 try await keys.deleteIdentity(label: org.keyLabel)
                 try keys.removeReferenceKey(at: "\(home)/.ssh/\(org.keyFileName)")
                 done.append("Deleted \(org.keyLabel) from the Secure Enclave and its reference files.")
@@ -694,11 +810,11 @@ struct VaultRow: View {
                     pill("Mount", .accent) { store.mountTarget = org }
                 case .mounted:
                     link("Eject") { Task { await store.eject(org) } }
-                    pill("Clone…", .accent) { store.cloneTarget = org }
+                    pill("Clone", .accent) { store.cloneTarget = org }
                 case .unlocked:
                     link("Mount") { Task { await store.relocate(org) } }
                     link("Secure") { Task { await store.eject(org) } }
-                    pill("Clone…", .accent) { store.cloneTarget = org }
+                    pill("Clone", .accent) { store.cloneTarget = org }
                 case .misplaced:
                     pill("Relocate", .destructive) { Task { await store.relocate(org) } }
                 case .none:
@@ -749,7 +865,7 @@ struct MountSheet: View {
                 Spacer()
                 PillButton(title: "Cancel", role: .neutral, height: 32, hpad: 18,
                            radius: 8, font: .system(size: 13, weight: .medium)) { dismiss() }
-                PillButton(title: working ? "Unlocking…" : "Mount", role: .accent, height: 32,
+                PillButton(title: working ? "Unlocking" : "Mount", role: .accent, height: 32,
                            hpad: 18, radius: 8, font: .system(size: 13, weight: .semibold)) { submit() }
                     .disabled(passphrase.isEmpty || working)
                     .opacity(passphrase.isEmpty || working ? 0.5 : 1)
@@ -836,7 +952,7 @@ struct CloneSheet: View {
                 Spacer()
                 PillButton(title: "Cancel", role: .neutral, height: 32, hpad: 18,
                            radius: 8, font: .system(size: 13, weight: .medium)) { dismiss() }
-                PillButton(title: working ? "Cloning…" : "Clone", role: .accent, height: 32,
+                PillButton(title: working ? "Cloning" : "Clone", role: .accent, height: 32,
                            hpad: 18, radius: 8, font: .system(size: 13, weight: .semibold)) { submit() }
                     .disabled(url.isEmpty || !pinned || working || selected == nil)
                     .opacity(url.isEmpty || !pinned || working || selected == nil ? 0.5 : 1)
@@ -909,7 +1025,7 @@ struct OrganizationsView: View {
                                 if store.busyOrgs.contains(org.name) {
                                     ProgressView().controlSize(.small)
                                 } else {
-                                    LinkButton("Remove…", color: p.label3, hoverColor: p.redText,
+                                    LinkButton("Remove", color: p.label3, hoverColor: p.redText,
                                                font: .system(size: 12.5, weight: .medium)) {
                                         store.removeTarget = org
                                     }
@@ -940,21 +1056,21 @@ struct MenuBarView: View {
         ForEach(store.organizations) { org in
             switch org.vault {
             case .mounted:
-                Button("Eject \(org.displayName)  (mounted)") {
+                Button("Eject \(org.displayName) — mounted") {
                     Task { await store.eject(org) }
                 }
             case .locked:
-                Button("Mount \(org.displayName)…") {
+                Button("Mount \(org.displayName)") {
                     store.selection = .vaults
                     store.mountTarget = org
                     NSApp.activate(ignoringOtherApps: true)
                 }
             case .unlocked:
-                Button("Secure \(org.displayName)  (unlocked!)") {
+                Button("Secure \(org.displayName) — unlocked, not at rest") {
                     Task { await store.eject(org) }
                 }
             case .misplaced:
-                Button("Relocate \(org.displayName)  (wrong location)") {
+                Button("Relocate \(org.displayName) — mounted in the wrong place") {
                     Task { await store.relocate(org) }
                 }
             case .none:

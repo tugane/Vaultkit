@@ -36,6 +36,10 @@ that followed. It packages a day of expert setup into a few minutes.
   for PolinRider indicators — the appended loader in both variants, the propagation
   script, the malicious npm packages, VS Code tasks that run on folder open, font files
   that are not fonts. A full pass on mount, then changed files every five minutes.
+  Critical hits are neutralized on the spot: appended loaders are cut back to the
+  legitimate config, artifacts and malicious packages are moved into a quarantine
+  inside the vault. Restore, purge, a full history, and a notification when it acts.
+  Turn auto-quarantine off and it only reports.
 - **Offboarding that is reversible by default.** Removing an organization takes out its
   git routing and nothing else; destroying the vault or the enclave key is a separate,
   typed-confirmation choice, and you get a receipt of what was done and what is still
@@ -125,10 +129,10 @@ as your user can read every *mounted* vault and every unvaulted file. Vaults nar
 window to the org you are working on; they do not sandbox execution. Run dependencies
 you do not trust in a container or VM.
 
-**It is not an antivirus.** The Doctor inspects configuration. The Scanner matches one
-published indicator set — the PolinRider campaign's, dated in the UI — and finds what it
-has indicators for and nothing else. It never edits a repository; it tells you where to
-look and what the published remediation is.
+**It is an antivirus for exactly one campaign.** The Scanner matches one published
+indicator set — PolinRider's, dated in the UI — and finds nothing it has no indicator
+for. Where it acts, it never destroys: the original bytes go to a quarantine inside the
+vault and can be restored. The Doctor, separately, inspects configuration only.
 
 ## Security
 

@@ -71,6 +71,15 @@ struct DoctorFinding: Identifiable {
 /// One indicator match from the Scanner (UC12). Findings are keyed by file so
 /// an incremental pass can replace exactly the ones it re-evaluated.
 struct ScanFinding: Identifiable, Hashable {
+    /// What the Scanner can do about this hit without a human.
+    enum Fix: Hashable {
+        case clean                   // truncate an appended loader, keep the legitimate content
+        case quarantine              // move the whole file or directory out of the tree
+        case dropDependency(String)  // remove one package from package.json
+        case dropGitignoreLine       // remove the injected "config.bat" line
+        case manual                  // nothing safe to automate
+    }
+
     var id: UUID = UUID()
     var orgName: String
     var repo: String                 // nearest enclosing git repository
@@ -80,6 +89,52 @@ struct ScanFinding: Identifiable, Hashable {
     var severity: DoctorFinding.Severity
     var evidence: String             // the marker matched — never payload bytes
     var remediation: String
+    var fix: Fix = .manual
+}
+
+/// One pass of the Scanner, as kept in the history.
+struct ScanEvent: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var date: Date
+    var duration: TimeInterval
+    var mode: String                 // "full", "changed files", "deep"
+    var orgs: [String]
+    var repos: Int
+    var files: Int
+    var hits: Int
+}
+
+/// Something the Scanner did — or could not do — about a finding.
+struct ActionEvent: Identifiable, Codable, Hashable {
+    enum Kind: String, Codable { case cleaned, quarantined, restored, purged, manual }
+    var id: UUID = UUID()
+    var date: Date
+    var kind: Kind
+    var orgName: String
+    var path: String                 // relative to the org folder
+    var indicator: String
+    var detail: String
+    var quarantineID: String? = nil
+}
+
+/// A file the Scanner moved out of harm's way. It lives inside the org's own
+/// vault, so it stays encrypted at rest and never leaves the compartment, with
+/// a neutralized name so nothing can import it by accident.
+struct QuarantineItem: Identifiable, Codable, Hashable {
+    var id: String                   // "20260904-171203-3f2a"
+    var orgName: String
+    var originalPath: String         // relative to the org folder
+    var indicator: String
+    var evidence: String
+    var date: Date
+    var kind: ActionEvent.Kind       // .cleaned keeps the original here; .quarantined moved it whole
+    var sha256: String               // of the original bytes ("" for a directory)
+    var bytes: Int
+}
+
+struct ScannerHistory: Codable {
+    var scans: [ScanEvent] = []
+    var actions: [ActionEvent] = []
 }
 
 /// What an organization removal did, and what it could not do for you.

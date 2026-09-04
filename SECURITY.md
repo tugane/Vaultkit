@@ -43,8 +43,10 @@ volume that is ciphertext while ejected.
 **Hosts are pinned.** Clones are refused for hosts absent from `known_hosts`. There is
 no trust-on-first-use path in the app.
 
-**Nothing durable is stored.** Vaultkit keeps no tokens, no passwords, no passphrases,
-and has no network client of its own.
+**Nothing secret is stored.** Vaultkit keeps no tokens, no passwords, no passphrases,
+and has no network client of its own. The one file it keeps — the Scanner's history in
+Application Support — holds org names, repo-relative paths and indicator names, never
+file contents.
 
 ## What it does not guarantee
 
@@ -63,8 +65,16 @@ apply them for you.
 **It does not detect malware in general.** The Doctor inspects configuration state. The
 Scanner matches a specific, published indicator set — the PolinRider campaign's loaders,
 artifacts, packages and infrastructure — in mounted vaults, and shows that set's date.
-Anything without an indicator in it is invisible to the Scanner. It reads bytes and
-writes nothing; remediation is yours, with the published steps shown beside each hit.
+Anything without an indicator in it is invisible to the Scanner.
+
+**When it acts, it acts inside the vault and keeps everything.** With auto-quarantine on
+(the default) a critical hit is neutralized as soon as it is found: an appended loader
+is cut at its injection line so the real config keeps working; a standalone artifact,
+weaponized task file or malicious package is moved whole. The original bytes go to
+`<vault>/.vaultkit/quarantine/<id>/` under a neutralized name with a record beside them —
+encrypted at rest with the rest of the vault, never outside the organization's
+compartment, restorable and purgeable from the app. A dependency removal that would
+leave `package.json` unparseable is not written. Warnings are never auto-actioned.
 
 ## Trust boundaries
 
@@ -77,6 +87,7 @@ writes nothing; remediation is yours, with the published steps shown beside each
 | Host pinning, clone, auth test | `ssh`, `git` | user | signature via enclave + touch |
 | Prompt attribution | `ps`, `lsof` | user | none |
 | Indicator scan of mounted vaults | direct file IO, read-only | user | none — file bytes are matched, never sent or stored |
+| Quarantine / clean a hit | direct file IO inside the same vault | user | none — bytes move within the vault; the history records paths and indicator names only |
 | Destroy a vault / delete an identity | `diskutil apfs deleteVolume`, `sc_auth delete-ctk-identity` | user | none — typed confirmation, refused while mounted, verified against the system afterwards |
 
 **No component runs as root, and no privileged helper is installed.**

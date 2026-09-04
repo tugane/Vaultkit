@@ -138,7 +138,7 @@ struct NewKeySheet: View {
             .frame(height: 74)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(p.well))
             HStack(spacing: 10) {
-                PillButton(title: "Copy key", role: .neutral, height: 32, hpad: 18,
+                PillButton(title: "Copy Key", role: .neutral, height: 32, hpad: 18,
                            radius: 8, font: .system(size: 13, weight: .medium)) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(publicKey, forType: .string)

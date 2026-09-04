@@ -249,11 +249,11 @@ struct OrgCard: View {
                             pill("Mount", .accent) { store.mountTarget = org }
                         case .mounted:
                             link("Eject") { Task { await store.eject(org) } }
-                            pill("Clone…", .accent) { store.cloneTarget = org }
+                            pill("Clone", .accent) { store.cloneTarget = org }
                         case .unlocked:
                             link("Mount") { Task { await store.relocate(org) } }
                             link("Secure") { Task { await store.eject(org) } }
-                            pill("Clone…", .accent) { store.cloneTarget = org }
+                            pill("Clone", .accent) { store.cloneTarget = org }
                         case .misplaced:
                             pill("Relocate", .destructive) { Task { await store.relocate(org) } }
                         case .none:

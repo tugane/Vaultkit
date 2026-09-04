@@ -184,8 +184,28 @@ What it matches (OpenSourceMalware's published set, dated in the UI):
 - the dead-drop addresses, XOR keys and bootstrap hosts anywhere in a targeted file.
 
 A **deep scan** widens to every JS-family source file on demand. Findings show the
-file, the marker matched (never payload bytes), and the published remediation. The
-Scanner never edits a repository. A hit outranks everything on the dashboard.
+file, the marker matched (never payload bytes), and the published remediation. A hit
+outranks everything on the dashboard.
+
+**Acting on a hit.** With auto-quarantine on (the default), every critical hit is
+neutralized in the same pass it is found, then the touched files are re-read so the
+list shows the state after the fix:
+
+- an appended loader is **cut** at the first injection line — the legitimate config
+  above it is kept, so the build keeps working;
+- an artifact, a weaponized `tasks.json`, a fake font or a malicious package directory
+  is **moved whole**;
+- a malicious dependency is removed from `package.json` line by line, and only if the
+  result still parses.
+
+Nothing is destroyed. Originals go to `<vault>/.vaultkit/quarantine/<id>/` — inside the
+org's own vault, so they stay encrypted at rest and never leave the compartment — under
+a neutralized name with a record beside them. The Quarantine tab restores or purges;
+restoring an infected original while auto-quarantine is on means the next pass takes it
+again, and the tab says so. Warnings are never auto-actioned; each carries a Fix button.
+Every pass and every action is written to the History (a file in Application Support
+holding paths and indicator names, never contents), and a system notification says
+what was found and what was done.
 
 ## Non-goals
 

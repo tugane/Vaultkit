@@ -66,7 +66,9 @@ flowchart TB
 | SSH key handles | Secure Enclave + `~/.ssh/id_*` reference files | derived (labels only) |
 | Host pins | `~/.ssh/known_hosts` | derived |
 | Vault state | APFS container (`diskutil`) | derived, polled |
-| Org registry (names, forge hosts, folder paths) | `~/Library/Application Support/Vaultkit/orgs.json` | **owned** — the only file Vaultkit owns, and it contains no secrets |
+| Org registry (names, forge hosts, folder paths) | `~/Library/Application Support/Vaultkit/orgs.json` | **owned** — contains no secrets |
+| Scanner history (passes, actions) | `~/Library/Application Support/Vaultkit/scanner-history.json` | **owned** — org names, repo-relative paths, indicator names; never file contents |
+| Quarantined bytes | `<vault>/.vaultkit/quarantine/<id>/` | **owned**, but inside the org's own encrypted vault — never outside its compartment |
 
 If `orgs.json` is deleted, the Doctor can reconstruct organizations by scanning
 the gitconfig includes — the app degrades gracefully (invariant I2).
@@ -169,14 +171,22 @@ flowchart LR
     F & I --> W[Walk vault, prune .git/node_modules/build dirs<br/>check node_modules top level by package name]
     W --> M[Byte-match indicators:<br/>loader markers + YARA conjunctions,<br/>artifacts, packages, tasks.json, font magic, C2]
     M --> K[Merge: replace findings for re-read files,<br/>drop findings for vanished files]
-    K --> U[Findings: file, marker, published remediation<br/>never payload bytes, never an edit]
+    K --> U[Findings: file, marker, published remediation<br/>never payload bytes]
+    U -->|auto-quarantine on, critical| Q{fix kind}
+    Q -- clean --> C[Cut at first injection line,<br/>original → vault quarantine]
+    Q -- quarantine --> V[Move whole → vault quarantine]
+    Q -- dependency --> J[Line-edit package.json,<br/>write only if it still parses]
+    C & V & J --> H[History: what was found, what was done<br/>+ system notification]
+    H --> R[Re-read touched files:<br/>list shows the state after the fix]
     E[Vault ejected] --> D[Drop that org's findings + baseline]
 ```
 
-The Scanner is the one component that reads inside vaults. It is read-only by
-construction — it opens files and compares bytes — and it never sends or stores
-what it reads. Change detection uses ctime because the campaign's own tooling
-forges mtime.
+The Scanner is the one component that reads inside vaults, and — with
+auto-quarantine on — the one that writes there. The scan itself only compares
+bytes and never sends or stores what it reads. Acting is a separate, logged
+step that moves bytes *within* the same vault and never destroys them; restore
+and purge are explicit. Change detection uses ctime because the campaign's own
+tooling forges mtime.
 
 ## Trust boundaries & privilege inventory
 
@@ -190,7 +200,8 @@ forges mtime.
 | Auth verification | `ssh -T` | user | signature via enclave + touch |
 | Host scan / forge probe | `ssh-keyscan`, HTTPS GET | user | none (public data) |
 | Prompt attribution | `ps`, `lsof` | user (root holders inferred, not seen) | none |
-| Indicator scan | direct file IO in mounted vaults, read-only | user | none — bytes matched in memory, nothing written or transmitted |
+| Indicator scan | direct file IO in mounted vaults, read-only | user | none — bytes matched in memory, nothing transmitted |
+| Quarantine / clean | direct file IO within the same vault | user | none — originals kept in the vault's quarantine; history holds paths and names only |
 | Destroy vault | `diskutil apfs deleteVolume` | user (Owners enabled) | none — refused while mounted, verified by re-listing |
 
 ### Passphrase entry paths (honest note on I1)
