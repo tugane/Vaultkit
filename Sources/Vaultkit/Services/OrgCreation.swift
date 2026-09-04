@@ -75,7 +75,8 @@ struct EnclaveKeyService {
 /// Surgical writes to the git configuration. Never rewrites what it did not
 /// create: the per-org file is ours, and the root config is only appended to.
 struct GitConfigService {
-    private var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
+    let home: String
+    init(home: String = FileManager.default.homeDirectoryForCurrentUser.path) { self.home = home }
 
     func writeOrgConfig(_ org: Organization) throws {
         let body = """

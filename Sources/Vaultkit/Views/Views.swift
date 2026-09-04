@@ -16,8 +16,20 @@ final class AppStore: ObservableObject {
     @Published var showAddOrg = false
     @Published var creatingOrg: String?          // non-nil → step label, in flight
     @Published var newKey: (org: String, key: String)?
+    @Published var scanFindings: [ScanFinding] = []
+    @Published var scanReport: ScannerService.Report?
+    @Published var scanRunning = false
+    @Published var nextScanAt: Date?
+    @Published var removeTarget: Organization?   // non-nil → removal sheet is up
+    @Published var removingOrg: String?          // non-nil → step label, in flight
+    @Published var receipt: RemovalReceipt?
+
+    /// How often mounted vaults are re-checked for changed files.
+    static let scanInterval: TimeInterval = 300
+    private var mountedNames: Set<String> = []
 
     let vaults = DiskUtilVaultService()
+    let scanner = ScannerService()
     let doctor = DoctorService()
     let git = GitService()
     let keys = EnclaveKeyService()
@@ -44,6 +56,14 @@ final class AppStore: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
+
+        // The Scanner: changed files in every mounted vault, on a fixed cadence.
+        // Mount/eject transitions (caught in refresh) trigger a pass as well, so
+        // a freshly mounted vault never waits out the interval unwatched.
+        Task { await runScan() }
+        Timer.scheduledTimer(withTimeInterval: Self.scanInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.runScan() }
+        }
     }
 
     /// Vaults whose data is readable right now, by any definition.
@@ -56,11 +76,27 @@ final class AppStore: ObservableObject {
     }
 
     /// 100 minus weighted findings: critical −25, warning −10, info −3.
+    /// Scanner hits weigh the same as Doctor findings of the same severity.
     var postureScore: Int {
-        let penalty = findings.reduce(0) { acc, f in
+        let doctorPenalty = findings.reduce(0) { acc, f in
             acc + (f.severity == .critical ? 25 : f.severity == .warning ? 10 : 3)
         }
-        return max(0, 100 - penalty)
+        let scanPenalty = scanFindings.reduce(0) { acc, f in
+            acc + (f.severity == .critical ? 25 : 10)
+        }
+        return max(0, 100 - doctorPenalty - scanPenalty)
+    }
+
+    var compromiseIndicators: Int { scanFindings.filter { $0.severity == .critical }.count }
+
+    func runScan(deep: Bool = false) async {
+        guard !scanRunning else { return }
+        scanRunning = true
+        let (report, hits) = await scanner.scan(orgs: organizations, deep: deep)
+        scanReport = report
+        scanFindings = hits
+        nextScanAt = Date().addingTimeInterval(Self.scanInterval)
+        scanRunning = false
     }
 
     func runDoctor() async {
@@ -82,6 +118,14 @@ final class AppStore: ObservableObject {
             orgs[i].vault = states[orgs[i].name] ?? .none
         }
         organizations = orgs
+
+        // Any change to the set of mounted vaults is a reason to scan: a new
+        // mount needs its full pass, an eject drops its findings.
+        let nowMounted = Set(orgs.filter { $0.vault == .mounted }.map(\.name))
+        if nowMounted != mountedNames {
+            mountedNames = nowMounted
+            Task { await runScan() }
+        }
     }
 
     /// Move a misplaced (e.g. Finder-mounted) volume to its canonical path,
@@ -199,6 +243,65 @@ final class AppStore: ObservableObject {
     func openClone(preferring org: Organization? = nil) {
         cloneTarget = org ?? cloneableOrgs.first
     }
+
+    /// UC8: the reversible part first (git routing), then only what was asked
+    /// for. Every destructive step is verified against the system afterwards,
+    /// and a failure stops the sequence with the machine in a coherent state.
+    func removeOrganization(_ org: Organization, deleteVault: Bool, deleteKey: Bool) async -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let folder = (org.folderPath as NSString).expandingTildeInPath
+        var done: [String] = []
+        var todo: [String] = []
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name); removingOrg = nil }
+
+        do {
+            if deleteVault, org.vault != .none {
+                if org.vault != .locked {
+                    removingOrg = "Ejecting the vault…"
+                    try await vaults.eject(org)
+                }
+                removingOrg = "Deleting the vault…"
+                try await vaults.deleteVault(for: org)
+                done.append("Deleted the encrypted volume and its contents.")
+            }
+
+            removingOrg = "Removing the git rules…"
+            try gitConfig.removeOrganization(org)
+            done.append("Removed the includeIf rules and ~/.gitconfig-\(org.name).")
+
+            if deleteKey {
+                removingOrg = "Deleting the Secure Enclave key…"
+                try await keys.deleteIdentity(label: org.keyLabel)
+                try keys.removeReferenceKey(at: "\(home)/.ssh/\(org.keyFileName)")
+                done.append("Deleted \(org.keyLabel) from the Secure Enclave and its reference files.")
+                todo.append("Delete the public key from the organization's forge (authentication and signing keys).")
+            } else if org.vault != .none || deleteVault {
+                todo.append("The Secure Enclave key \(org.keyLabel) was kept.")
+            }
+
+            // The placeholder only goes when the vault did: otherwise it is
+            // still that volume's mount point for work-on and friends.
+            if deleteVault, !vaults.isMountPoint(folder),
+               (try? FileManager.default.contentsOfDirectory(atPath: folder))?
+                   .filter({ $0 != ".DS_Store" }).isEmpty ?? false {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder)
+                try? FileManager.default.removeItem(atPath: folder)
+                done.append("Removed the empty placeholder \(org.folderPath).")
+            } else if !deleteVault, org.vault != .none {
+                todo.append("The vault volume was kept; mount it with diskutil or add the organization again.")
+            }
+            todo.append("Remove any Host block for this org in ~/.ssh/config and its line in allowed_signers — Vaultkit does not write those.")
+
+            await runDoctor()
+            receipt = RemovalReceipt(org: org.displayName, done: done, todo: todo)
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            await runDoctor()
+            return false
+        }
+    }
 }
 
 // MARK: - Vault state presentation (one place, palette-driven)
@@ -252,6 +355,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
     case organizations = "Organizations"
     case vaults = "Vaults"
     case doctor = "Doctor"
+    case scanner = "Scanner"
 
     var id: String { rawValue }
 
@@ -261,6 +365,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .organizations: "person.2.badge.key"
         case .vaults: "lock.square.stack"
         case .doctor: "stethoscope"
+        case .scanner: "magnifyingglass"
         }
     }
 
@@ -271,6 +376,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .organizations: "building.2.fill"
         case .vaults: "lock.square.stack.fill"
         case .doctor: "waveform.path.ecg"
+        case .scanner: "magnifyingglass.circle.fill"
         }
     }
 }
@@ -292,6 +398,7 @@ struct ContentView: View {
                 case .organizations: OrganizationsView()
                 case .vaults: VaultsView()
                 case .doctor: DoctorView()
+                case .scanner: ScannerView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -317,6 +424,12 @@ struct ContentView: View {
             CloneSheet(org: org)
         }
         .sheet(isPresented: $store.showAddOrg) { AddOrgSheet() }
+        .sheet(item: $store.removeTarget) { org in
+            RemoveOrgSheet(org: org)
+        }
+        .sheet(item: $store.receipt) { receipt in
+            ReceiptSheet(receipt: receipt)
+        }
         .sheet(isPresented: Binding(
             get: { store.newKey != nil },
             set: { if !$0 { store.newKey = nil } }
@@ -419,6 +532,7 @@ struct SidebarView: View {
                     sectionHead("Posture")
                     row(.dashboard, chip: nil)
                     row(.doctor, chip: store.findings.isEmpty ? nil : "\(store.findings.count)")
+                    row(.scanner, chip: store.scanFindings.isEmpty ? nil : "\(store.scanFindings.count)")
 
                     sectionHead("Manage")
                     row(.organizations, chip: "\(store.organizations.count)")
@@ -792,6 +906,14 @@ struct OrganizationsView: View {
                                 Text(org.vault.label)
                                     .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(org.vault.textColor(p))
+                                if store.busyOrgs.contains(org.name) {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    LinkButton("Remove…", color: p.label3, hoverColor: p.redText,
+                                               font: .system(size: 12.5, weight: .medium)) {
+                                        store.removeTarget = org
+                                    }
+                                }
                             }
                             .padding(.horizontal, 22).padding(.vertical, 20)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -839,6 +961,17 @@ struct MenuBarView: View {
                 Text("\(org.displayName) — no vault")
             }
         }
+        Divider()
+        if store.compromiseIndicators > 0 {
+            Button("Scanner: \(plural(store.compromiseIndicators, "compromise indicator"))") {
+                store.selection = .scanner
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        } else {
+            Text(store.scanReport == nil ? "Scanner: no pass yet"
+                 : "Scanner: clean · \(ScannerView.relative(store.scanReport!.finishedAt))")
+        }
+        Button("Scan Now") { Task { await store.runScan() } }
         Divider()
         Button("Refresh") { Task { await store.refresh() } }
         Button("Open Vaultkit") { NSApp.activate(ignoringOtherApps: true) }

@@ -67,3 +67,25 @@ struct DoctorFinding: Identifiable {
     var autoFixable: Bool
     var orgName: String? = nil       // the org this finding targets (scopes auto-fixes)
 }
+
+/// One indicator match from the Scanner (UC12). Findings are keyed by file so
+/// an incremental pass can replace exactly the ones it re-evaluated.
+struct ScanFinding: Identifiable, Hashable {
+    var id: UUID = UUID()
+    var orgName: String
+    var repo: String                 // nearest enclosing git repository
+    var path: String                 // relative to the org folder
+    var absolutePath: String
+    var indicator: String            // "PolinRider loader — original variant"
+    var severity: DoctorFinding.Severity
+    var evidence: String             // the marker matched — never payload bytes
+    var remediation: String
+}
+
+/// What an organization removal did, and what it could not do for you.
+struct RemovalReceipt: Identifiable {
+    var id: UUID = UUID()
+    var org: String
+    var done: [String]
+    var todo: [String]
+}

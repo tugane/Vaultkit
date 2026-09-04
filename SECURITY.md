@@ -60,7 +60,11 @@ defence; if you approve prompts you did not initiate, the guarantees fall.
 signatures, protected branches, enforced 2FA — are complementary and Vaultkit cannot
 apply them for you.
 
-**It does not detect malware.** The Doctor inspects configuration state.
+**It does not detect malware in general.** The Doctor inspects configuration state. The
+Scanner matches a specific, published indicator set — the PolinRider campaign's loaders,
+artifacts, packages and infrastructure — in mounted vaults, and shows that set's date.
+Anything without an indicator in it is invisible to the Scanner. It reads bytes and
+writes nothing; remediation is yours, with the published steps shown beside each hit.
 
 ## Trust boundaries
 
@@ -72,6 +76,8 @@ apply them for you.
 | Identity and signing config | direct file IO | user | none |
 | Host pinning, clone, auth test | `ssh`, `git` | user | signature via enclave + touch |
 | Prompt attribution | `ps`, `lsof` | user | none |
+| Indicator scan of mounted vaults | direct file IO, read-only | user | none — file bytes are matched, never sent or stored |
+| Destroy a vault / delete an identity | `diskutil apfs deleteVolume`, `sc_auth delete-ctk-identity` | user | none — typed confirmation, refused while mounted, verified against the system afterwards |
 
 **No component runs as root, and no privileged helper is installed.**
 

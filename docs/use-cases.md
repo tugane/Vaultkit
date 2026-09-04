@@ -95,9 +95,26 @@ Each finding: severity, plain-English explanation, one-click fix where safe (wit
 
 ## UC8 — Offboard an organization (P2's exit)
 
-1. Eject + optionally **destroy** the vault (with explicit double confirmation), or export it to an encrypted archive handed to the client.
-2. Remove config blocks (previewed diff), delete the enclave identity, remind about forge-side key deletion (deep link).
-3. Produce a plain-English offboarding receipt: what was removed, what the user must still do in the browser.
+**Persona:** P2 · **Goal:** leaving a client removes exactly what the user asks for, and
+tells them what it could not remove.
+
+From the Organizations page, *Remove…* on the org's row. The default is reversible:
+
+1. **Git routing goes.** Every `includeIf` that points at `~/.gitconfig-<org>` — the
+   `~/work/<org>/` rule and any `/Volumes/<Name>/` fallback — is stripped, the rest of
+   `~/.gitconfig` preserved byte for byte, and the per-org file deleted. Add the org
+   again later and the untouched vault and key are picked up as they were.
+2. **Destroying the vault is opt-in** and requires typing the org name. The vault is
+   ejected first (dissenters are named, never force-unmounted), `diskutil apfs
+   deleteVolume` runs, and the deletion is only believed once the volume is absent from
+   a fresh listing. The empty placeholder folder goes with it.
+3. **Deleting the enclave identity is opt-in**, separately: `sc_auth` addresses
+   identities by hash, so the label is resolved first, and the reference files in
+   `~/.ssh` are removed with it.
+4. A **receipt** lists what was done and what no app can do: delete the public key on
+   the forge, and remove any hand-written `Host` block or `allowed_signers` line.
+
+A failure at any step stops the sequence with the machine in a coherent state (I4).
 
 ## UC9 — Export / import a team recipe (P4)
 
@@ -140,9 +157,40 @@ trust-on-first-use after an incident), passes the org's `core.sshCommand`
 explicitly (includeIf config isn't reliably applied *during* clone), and warns
 that Touch ID will prompt. Cross-org misrouting is impossible through this path.
 
+## UC12 — Watch mounted vaults for compromise indicators
+
+**Persona:** all · **Goal:** the campaign that caused this setup cannot come back
+unnoticed into a vault while it is open.
+
+The Scanner keeps a baseline per mounted vault. A vault gets a **full pass when it
+mounts**, then every five minutes only the files whose content *or inode* changed are
+re-read. Change detection uses ctime as well as mtime because PolinRider's own
+propagation script rewinds the clock to forge timestamps — mtime can be set from user
+space, ctime cannot. Ejecting a vault drops its findings and its baseline; the next
+mount starts clean.
+
+What it matches (OpenSourceMalware's published set, dated in the UI):
+
+- the appended loader in build config files — `rmcej%otb%`, `Cot%3t=shtP`, the decoder
+  names and the seed conjunctions from the multi-variant YARA rule — wherever those
+  files occur, since many victims are infected only in nested monorepo paths;
+- `temp_auto_push.bat`, `config.bat`, the injected `.gitignore` line, and any `.bat`
+  that amends commits after reading `LAST_COMMIT_DATE`;
+- the actor's npm packages, in `package.json` dependency sections and installed under
+  `node_modules` (checked by name at the top level; `node_modules` is never walked);
+- `.vscode/tasks.json` carrying a known bootstrap host, the StakingGame template UUID,
+  or a `folderOpen` task that downloads and runs code;
+- `.woff`/`.woff2` files without a WOFF magic number;
+- the dead-drop addresses, XOR keys and bootstrap hosts anywhere in a targeted file.
+
+A **deep scan** widens to every JS-family source file on demand. Findings show the
+file, the marker matched (never payload bytes), and the published remediation. The
+Scanner never edits a repository. A hit outranks everything on the dashboard.
+
 ## Non-goals
 
-- Not an antivirus, not an EDR — the Doctor checks *configuration*, not malware.
+- Not an antivirus, not an EDR — the Doctor checks *configuration*, and the Scanner
+  matches one published indicator set; neither finds malware it has no indicator for.
 - No key escrow, no cloud sync, no account system, no telemetry.
 - No custom crypto: all primitives are the OS's (Secure Enclave, APFS encryption, OpenSSH).
 - Does not manage what happens *inside* repos (that's the forge's rulesets and the team's review process).

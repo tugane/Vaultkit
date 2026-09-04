@@ -265,6 +265,24 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
         return vols.first { $0.deviceIdentifier == device }?.locked ?? false
     }
 
+    /// Destroy the org's volume and everything in it (UC8). Refuses while
+    /// mounted — the caller ejects first, so dissenters get named rather than
+    /// force-unmounted. diskutil can exit 0 on failure, so the volume list is
+    /// re-read and the deletion is only believed once the volume is gone.
+    func deleteVault(for org: Organization) async throws {
+        let vol = try await volume(for: org)
+        if let mp = vol.mountPoint {
+            throw VaultError.commandFailed("The vault is still mounted at \(mp). Eject it first.")
+        }
+        let r = try await runner.run(diskutil, ["apfs", "deleteVolume", vol.deviceIdentifier])
+        let remaining = (try? await listVolumes()) ?? []
+        if remaining.contains(where: { $0.deviceIdentifier == vol.deviceIdentifier }) {
+            let detail = [r.stderr, r.stdout].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? "diskutil did not remove the volume"
+            throw VaultError.commandFailed(detail)
+        }
+    }
+
     func dissenters(for org: Organization) async throws -> [String] {
         let path = (try? await volume(for: org))?.mountPoint ?? expand(org.folderPath)
         return await holders(at: path)

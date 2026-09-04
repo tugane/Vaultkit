@@ -11,14 +11,20 @@ struct DashboardView: View {
     private var theme: Theme { Theme(rawValue: themeRaw) ?? .dark }
     private var exposed: Int { store.exposedOrgs.count }
 
+    private var indicators: Int { store.compromiseIndicators }
+
     private var headline: String {
-        exposed == 0
+        if indicators > 0 { return "Compromise\nindicators found." }
+        return exposed == 0
             ? "Everything is\nat rest."
             : "\(plural(exposed, "vault")) exposed\nright now."
     }
 
     private var subtitle: String {
-        exposed == 0
+        if indicators > 0 {
+            return "The scanner matched \(plural(indicators, "PolinRider indicator")) in a mounted vault. Treat every credential present during a build there as exposed, and do not open that folder in an editor until it is clean."
+        }
+        return exposed == 0
             ? "All organization data is ciphertext. Mount a vault when you're ready to work — every unlock, commit and push asks for your touch."
             : "Exposed vaults are readable by anything running on this Mac. Secure what you're not actively using."
     }
@@ -54,8 +60,15 @@ struct DashboardView: View {
                             .frame(maxWidth: 460, alignment: .leading)
                             .padding(.top, 16)
                         HStack(spacing: 12) {
+                            if indicators > 0 {
+                                PillButton(title: "Open Scanner", role: .destructive, height: 38, hpad: 22,
+                                           font: .system(size: 14, weight: .semibold)) {
+                                    store.selection = .scanner
+                                }
+                            }
                             if exposed > 0 {
-                                PillButton(title: "Secure All", role: .accent, height: 38, hpad: 22,
+                                PillButton(title: "Secure All", role: indicators > 0 ? .neutral : .accent,
+                                           height: 38, hpad: 22,
                                            font: .system(size: 14, weight: .semibold)) {
                                     Task { await store.secureAll() }
                                 }
@@ -74,7 +87,8 @@ struct DashboardView: View {
 
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 14),
                                         GridItem(.flexible(), spacing: 14)], spacing: 14) {
-                        ScoreCard(score: store.postureScore, findings: store.findings)
+                        ScoreCard(score: store.postureScore, findings: store.findings,
+                                  indicators: store.compromiseIndicators)
                         SummaryCard()
                     }
                     .padding(.top, 48)
@@ -99,6 +113,7 @@ struct DashboardView: View {
 struct ScoreCard: View {
     let score: Int
     let findings: [DoctorFinding]
+    var indicators: Int = 0            // Scanner criticals — outrank everything
     @Environment(\.palette) private var p
 
     private var ringColor: Color {
@@ -109,6 +124,7 @@ struct ScoreCard: View {
     }
 
     private var statusLine: String {
+        if indicators > 0 { return "\(plural(indicators, "compromise indicator")) found" }
         let criticals = findings.filter { $0.severity == .critical }.count
         let warnings = findings.filter { $0.severity == .warning }.count
         if criticals > 0 { return "\(plural(criticals, "critical issue")) to fix" }
@@ -165,6 +181,10 @@ struct SummaryCard: View {
             summaryRow("stethoscope", p.label3,
                        store.findings.isEmpty ? "Doctor: no findings"
                                               : "Doctor: \(plural(store.findings.count, "finding"))")
+            summaryRow("magnifyingglass", store.scanFindings.isEmpty ? p.label3 : p.red,
+                       store.scanReport == nil ? "Scanner: no pass yet"
+                       : store.scanFindings.isEmpty ? "Scanner: clean · \(ScannerView.relative(store.scanReport!.finishedAt))"
+                       : "Scanner: \(plural(store.scanFindings.count, "indicator")) found")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 22).padding(.vertical, 20)

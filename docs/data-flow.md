@@ -9,6 +9,7 @@ flowchart TB
         DASH[Dashboard]
         VLT[Vaults panel + MenuBarExtra]
         DOC[Doctor panel]
+        SCN[Scanner panel]
         ASK["What's asking?"]
     end
 
@@ -18,6 +19,7 @@ flowchart TB
         VS[VaultServing<br/>diskutil apfs]
         HPS[HostPinServing<br/>keyscan + published fingerprints]
         DS[DoctorServing<br/>read-only derivation]
+        SS[ScannerService<br/>read-only indicator matching]
         SCR[SystemCommandRunning<br/>the ONLY Process boundary]
     end
 
@@ -39,6 +41,7 @@ flowchart TB
     HPS --> SCR
     DS --> FILES
     DS --> SCR
+    SS -->|reads mounted vaults only| APFS
     SCR --> SE
     SCR --> APFS
     SE -.every use.-> TID
@@ -156,6 +159,25 @@ flowchart LR
     U --> X[Apply via services<br/>never silently]
 ```
 
+## Flow 4 — Scanner (UC12)
+
+```mermaid
+flowchart LR
+    T[Trigger: mount / eject transition,<br/>5-minute tick, manual, deep] --> B{baseline for org?}
+    B -- no --> F[Full pass:<br/>every targeted file]
+    B -- yes --> I[Incremental pass:<br/>files with mtime OR ctime > baseline]
+    F & I --> W[Walk vault, prune .git/node_modules/build dirs<br/>check node_modules top level by package name]
+    W --> M[Byte-match indicators:<br/>loader markers + YARA conjunctions,<br/>artifacts, packages, tasks.json, font magic, C2]
+    M --> K[Merge: replace findings for re-read files,<br/>drop findings for vanished files]
+    K --> U[Findings: file, marker, published remediation<br/>never payload bytes, never an edit]
+    E[Vault ejected] --> D[Drop that org's findings + baseline]
+```
+
+The Scanner is the one component that reads inside vaults. It is read-only by
+construction — it opens files and compares bytes — and it never sends or stores
+what it reads. Change detection uses ctime because the campaign's own tooling
+forges mtime.
+
 ## Trust boundaries & privilege inventory
 
 | Operation | Tool | Privilege | Secret exposure |
@@ -168,6 +190,8 @@ flowchart LR
 | Auth verification | `ssh -T` | user | signature via enclave + touch |
 | Host scan / forge probe | `ssh-keyscan`, HTTPS GET | user | none (public data) |
 | Prompt attribution | `ps`, `lsof` | user (root holders inferred, not seen) | none |
+| Indicator scan | direct file IO in mounted vaults, read-only | user | none — bytes matched in memory, nothing written or transmitted |
+| Destroy vault | `diskutil apfs deleteVolume` | user (Owners enabled) | none — refused while mounted, verified by re-listing |
 
 ### Passphrase entry paths (honest note on I1)
 
@@ -200,3 +224,12 @@ source, because its audience will (rightly) read the code before trusting it.
    silently stays unlocked, so every lock must be verified afterwards (evict
    snapshot mounts, relock, re-check) before claiming "at rest". The Doctor
    must check: vault paths excluded from backups, or the destination encrypted.
+8. **Forged timestamps** → PolinRider's propagation script rewinds the system clock
+   so an amended commit keeps its original date; the same trick defeats mtime-based
+   change detection. The Scanner keys on ctime, which user space cannot set.
+9. **Vault ejected mid-scan** → the walk hits errors and returns a partial pass; the
+   next refresh sees the org unmounted, drops its findings and baseline, and the
+   next mount gets a full pass rather than a diff against a stale one.
+10. **Removal half-done** → each destructive step is verified against the system
+   (volume absent from a fresh listing, label absent from `sc_auth`) before the next
+   runs, and a failure stops with the routing either fully present or fully gone.

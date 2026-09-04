@@ -32,6 +32,14 @@ that followed. It packages a day of expert setup into a few minutes.
 - **A Doctor that watches for drift.** Ambient credentials, an open guard on a locked
   vault, files trapped under a placeholder, plaintext vaults in Time Machine, commits
   whose signatures do not verify.
+- **A Scanner for the campaign that started all this.** Every mounted vault is watched
+  for PolinRider indicators — the appended loader in both variants, the propagation
+  script, the malicious npm packages, VS Code tasks that run on folder open, font files
+  that are not fonts. A full pass on mount, then changed files every five minutes.
+- **Offboarding that is reversible by default.** Removing an organization takes out its
+  git routing and nothing else; destroying the vault or the enclave key is a separate,
+  typed-confirmation choice, and you get a receipt of what was done and what is still
+  yours to do on the forge.
 
 ## Status
 
@@ -117,7 +125,10 @@ as your user can read every *mounted* vault and every unvaulted file. Vaults nar
 window to the org you are working on; they do not sandbox execution. Run dependencies
 you do not trust in a container or VM.
 
-**It is not an antivirus.** The Doctor inspects configuration, not code.
+**It is not an antivirus.** The Doctor inspects configuration. The Scanner matches one
+published indicator set — the PolinRider campaign's, dated in the UI — and finds what it
+has indicators for and nothing else. It never edits a repository; it tells you where to
+look and what the published remediation is.
 
 ## Security
 
