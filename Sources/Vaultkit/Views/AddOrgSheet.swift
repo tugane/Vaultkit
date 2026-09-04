@@ -1,8 +1,8 @@
 import SwiftUI
 import TuganeDesign
 
-/// UC1/UC4: create an organization end to end — Secure Enclave key, encrypted
-/// vault, git identity routing — then hand back the public key to register.
+/// UC1/UC4: create an organization end to end: Secure Enclave key, encrypted
+/// vault, git identity routing, then hand back the public key to register.
 struct AddOrgSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -124,7 +124,7 @@ struct NewKeySheet: View {
                     .frame(width: 26, height: 26)
                 Text("\(org) is ready").font(.system(size: 15, weight: .bold))
             }
-            Text("The vault is mounted and git is routed. Register this public key on that organization's forge — once as an authentication key, and again as a signing key where the forge separates them.")
+            Text("The vault is mounted and git is routed. Register this public key on that organization's forge: once as an authentication key, and again as a signing key where the forge separates them.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(p.label2)
                 .lineSpacing(3)

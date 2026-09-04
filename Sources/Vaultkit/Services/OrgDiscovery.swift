@@ -1,7 +1,7 @@
 import Foundation
 
 /// Derives the organization list from the system's own config (invariant I2):
-/// `~/.gitconfig` includeIf blocks are the registry — Vaultkit's own state file
+/// `~/.gitconfig` includeIf blocks are the registry: Vaultkit's own state file
 /// is only ever a cache on top of this.
 struct OrgDiscovery {
 
@@ -13,7 +13,7 @@ struct OrgDiscovery {
 
         // Match: [includeIf "gitdir:~/work/<name>/"]
         var orgs: [Organization] = []
-        // Any non-slash folder name — git accepts more than lowercase ASCII.
+        // Any non-slash folder name: git accepts more than lowercase ASCII.
         let pattern = #/includeIf "gitdir:~/work/([^/"]+)/"/#
         for match in gitconfig.matches(of: pattern) {
             let name = String(match.1)

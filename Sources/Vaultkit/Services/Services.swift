@@ -4,7 +4,7 @@ import Foundation
 //
 // Every interaction Vaultkit has with the system goes through these protocols.
 // The real implementations shell out to the same battle-tested tools an expert
-// would use by hand (sc_auth, ssh-keygen, diskutil, git, ssh) — Vaultkit adds
+// would use by hand (sc_auth, ssh-keygen, diskutil, git, ssh). Vaultkit adds
 // orchestration, preview, and verification, never reimplements crypto.
 // Protocol-first so every flow is testable against fakes.
 
@@ -44,12 +44,12 @@ protocol GitConfigServing {
 
 /// Encrypted APFS vault lifecycle via `diskutil apfs`.
 /// Passphrases are entered in diskutil's own interactive prompt or the system
-/// dialog — they never pass through Vaultkit.
+/// dialog. They never pass through Vaultkit.
 protocol VaultServing {
     func state(of org: Organization) async throws -> VaultState
     func createVault(for org: Organization) async throws              // addVolume -passprompt
     /// Passphrase transits app memory once, piped to -stdinpassphrase, never
-    /// stored (documented I1 deviation — see data-flow.md).
+    /// stored (documented I1 deviation. See data-flow.md).
     func mount(_ org: Organization, passphrase: String) async throws
     func eject(_ org: Organization) async throws                      // lockVolume w/ dissenter handling
     func dissenters(for org: Organization) async throws -> [String]   // "zsh (pid 6223)"

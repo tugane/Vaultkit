@@ -4,7 +4,7 @@
 #
 #   scripts/install-local.sh
 #
-# This is the local path, NOT the distribution one — see release.sh for that.
+# This is the local path, NOT the distribution one. See release.sh for that.
 # The bundle is signed ad-hoc ("-"), which is enough for macOS to run it on
 # this machine but is tied to it: the app is not notarized and will not open
 # on anyone else's Mac. Ad-hoc identity also changes whenever the binary is
@@ -21,7 +21,7 @@ VERSION=$(grep -m1 'static let current' Sources/Vaultkit/Models/Models.swift | s
 [[ -n "$VERSION" ]] || { echo "could not read the version from Models.swift" >&2; exit 1; }
 APP="release/Vaultkit.app"
 
-echo "==> build (release) — Vaultkit $VERSION"
+echo "==> build (release): Vaultkit $VERSION"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swift build -c release --disable-sandbox

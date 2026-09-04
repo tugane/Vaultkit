@@ -2,7 +2,7 @@ import Foundation
 import TuganeDesign
 
 /// Read-only drift detection (UC6). Every check derives from the system itself
-/// (invariant I2) — each one below exists because the drift actually happened
+/// (invariant I2). Each one below exists because the drift actually happened
 /// during the manual setup this app is based on.
 final class DoctorService: DoctorServing, @unchecked Sendable {
     private let runner: any SystemCommandRunning
@@ -29,7 +29,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
     //
     // Observed in the wild: the Secure Enclave provider can emit an SSHSIG that
     // does not verify, while SSH auth with the same key keeps working. The
-    // commit looks signed, git reports "B", and nothing warns you — so check.
+    // commit looks signed, git reports "B", and nothing warns you, so check.
 
     private func signatureChecks(orgs: [Organization]) async -> [DoctorFinding] {
         var findings: [DoctorFinding] = []
@@ -52,7 +52,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
                 findings.append(DoctorFinding(
                     checkName: "Unverifiable commit signatures",
                     severity: .warning,
-                    detail: "\(plural(bad.count, "recent commit")) in \(repo) carry a signature that does not verify (\(bad.prefix(3).joined(separator: ", "))). Usually a Secure Enclave provider glitch rather than tampering — but pushing them shows red on the forge.",
+                    detail: "\(plural(bad.count, "recent commit")) in \(repo) carry a signature that does not verify (\(bad.prefix(3).joined(separator: ", "))). Usually a Secure Enclave provider glitch rather than tampering, but pushing them shows red on the forge.",
                     remediation: "Re-sign the tip with: git -C \(path) commit --amend --no-edit",
                     autoFixable: false,
                     orgName: org.name
@@ -74,7 +74,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
             return DoctorFinding(
                 checkName: "Open guard on locked vault",
                 severity: .warning,
-                detail: "\(org.folderPath) is writable while the \(org.displayName) vault is locked — anything created there lands on the unencrypted disk and is hidden when the vault mounts.",
+                detail: "\(org.folderPath) is writable while the \(org.displayName) vault is locked. Anything created there lands on the unencrypted disk and is hidden when the vault mounts.",
                 remediation: "chmod 000 the placeholder directory.",
                 autoFixable: true,
                 orgName: org.name
@@ -88,8 +88,8 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
         orgs.compactMap { org in
             guard org.vault == .locked else { return nil }
             let path = expand(org.folderPath)
-            // A closed guard (chmod 000) blocks listing even for the owner —
-            // briefly open read, list, and restore, or trapped plaintext behind
+            // A closed guard (chmod 000) blocks listing even for the owner.
+            // Briefly open read, list, and restore, or trapped plaintext behind
             // a properly-closed guard would be undetectable forever.
             var contents = try? fm.contentsOfDirectory(atPath: path)
             if contents == nil,
@@ -118,7 +118,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
             findings.append(DoctorFinding(
                 checkName: "Ambient GitHub CLI login",
                 severity: .critical,
-                detail: "~/.config/gh/hosts.yml exists — a gh login is active outside any organization folder, usable by every process on the machine.",
+                detail: "~/.config/gh/hosts.yml exists. A gh login is active outside any organization folder, usable by every process on the machine.",
                 remediation: "gh auth logout in the default context (run it outside any org folder), or delete the stray hosts.yml.",
                 autoFixable: false
             ))
@@ -147,7 +147,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
             findings.append(DoctorFinding(
                 checkName: "Git identity guessing enabled",
                 severity: .warning,
-                detail: "user.useConfigOnly is not set — git will invent an identity (user@hostname) in folders with no explicit config instead of refusing.",
+                detail: "user.useConfigOnly is not set. Git will invent an identity (user@hostname) in folders with no explicit config instead of refusing.",
                 remediation: "git config --global user.useConfigOnly true",
                 autoFixable: true
             ))
@@ -156,7 +156,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
             findings.append(DoctorFinding(
                 checkName: "Commit signing off for \(org.displayName)",
                 severity: .warning,
-                detail: "Commits in \(org.folderPath) are unsigned — a tampered or amended commit is indistinguishable from yours.",
+                detail: "Commits in \(org.folderPath) are unsigned. A tampered or amended commit is indistinguishable from yours.",
                 remediation: "Enable SSH signing with the org's enclave key (UC3).",
                 autoFixable: false
             ))
@@ -172,7 +172,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
               dest.status == 0, !dest.stdout.contains("No destinations") else { return [] }
         var findings: [DoctorFinding] = []
         // Only check mounted vaults: sticky exclusion xattrs live on the volume
-        // root and are invisible on the locked placeholder inode — checking
+        // root and are invisible on the locked placeholder inode: checking
         // there produced false "included" findings. Mounted is also exactly
         // when backup exposure actually happens.
         for org in orgs where org.vault == .mounted {
@@ -182,15 +182,15 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
             findings.append(DoctorFinding(
                 checkName: "Vault included in Time Machine",
                 severity: .warning,
-                detail: "\(org.folderPath) is included in backups — while mounted, its plaintext (and any tokens inside) is copied to the backup destination, and snapshots can hold the volume unlocked.",
-                remediation: "sudo tmutil addexclusion -p \(path) — or encrypt the backup destination.",
+                detail: "\(org.folderPath) is included in backups. While mounted, its plaintext (and any tokens inside) is copied to the backup destination, and snapshots can hold the volume unlocked.",
+                remediation: "sudo tmutil addexclusion -p \(path), or encrypt the backup destination.",
                 autoFixable: false
             ))
         }
         return findings
     }
 
-    // MARK: system posture (reported neutrally — the user decides)
+    // MARK: system posture (reported neutrally: the user decides)
 
     private func systemPostureChecks() async -> [DoctorFinding] {
         var findings: [DoctorFinding] = []
@@ -199,7 +199,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
             findings.append(DoctorFinding(
                 checkName: "System disk unencrypted",
                 severity: .info,
-                detail: "FileVault is off — org vaults are the only at-rest encryption on this Mac. Everything outside them is readable with physical disk access.",
+                detail: "FileVault is off. Org vaults are the only at-rest encryption on this Mac. Everything outside them is readable with physical disk access.",
                 remediation: "System Settings → Privacy & Security → FileVault (optional; your call).",
                 autoFixable: false
             ))
@@ -212,7 +212,7 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
     func applyFix(for finding: DoctorFinding, orgs: [Organization]) async {
         switch finding.checkName {
         case "Open guard on locked vault":
-            // Scope strictly to the finding's org — a blanket chmod would race
+            // Scope strictly to the finding's org. A blanket chmod would race
             // a concurrent mount that legitimately opened another org's guard.
             if let org = orgs.first(where: { $0.name == finding.orgName }), org.vault == .locked {
                 try? fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: expand(org.folderPath))

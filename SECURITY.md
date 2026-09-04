@@ -14,7 +14,7 @@ week. There is no bounty; there is credit, and a fix.
 
 Vaultkit is built for a developer whose single Mac holds several work identities. The
 adversary it is designed against is **code you did not intend to run** executing as
-your user — a poisoned dependency, a malicious build script, an editor plugin — plus
+your user: a poisoned dependency, a malicious build script, an editor plugin, plus
 anyone with physical access to the disk.
 
 It assumes macOS itself, the Secure Enclave, APFS encryption and OpenSSH are sound.
@@ -26,7 +26,7 @@ If the kernel is compromised or the attacker has root, nothing here helps.
 Enclave as a non-extractable `p-256-ne` identity. `~/.ssh/id_sk_<org>` is a reference
 handle, not a key: copied to another machine it is worthless. Every use requires
 biometric confirmation, so malware cannot authenticate, sign, or push while you are
-away — and an unexpected prompt is a tripwire telling you something tried.
+away, and an unexpected prompt is a tripwire telling you something tried.
 
 **Identity cannot be crossed.** Routing is path-based through git's `includeIf`, with
 `IdentitiesOnly=yes` so no other key is ever offered. Cloning through Vaultkit binds
@@ -34,7 +34,7 @@ URL, key and destination in one operation.
 
 **History cannot be tampered with silently.** Commits are SSH-signed by the same
 enclave key, so producing a valid signature also needs a touch. Malware that amends a
-commit either triggers an unexpected prompt or leaves the commit unsigned — visible
+commit either triggers an unexpected prompt or leaves the commit unsigned: visible
 locally and rejectable by a forge that requires signatures.
 
 **Data at rest is unreadable.** Each organization's code lives on an encrypted APFS
@@ -44,35 +44,35 @@ volume that is ciphertext while ejected.
 no trust-on-first-use path in the app.
 
 **Nothing secret is stored.** Vaultkit keeps no tokens, no passwords, no passphrases,
-and has no network client of its own. The one file it keeps — the Scanner's history in
-Application Support — holds org names, repo-relative paths and indicator names, never
+and has no network client of its own. The one file it keeps, the Scanner's history in
+Application Support, holds org names, repo-relative paths and indicator names, never
 file contents.
 
 ## What it does not guarantee
 
 **It does not sandbox execution.** This is the important limit. Anything running as
 your user can read every *mounted* vault, every unvaulted file, and your home
-directory. Vaults reduce exposure in *time* — only the org you are working on is
-readable — they do not isolate processes. Run untrusted code in a container or VM.
+directory. Vaults reduce exposure in *time*: only the org you are working on is
+readable. They do not isolate processes. Run untrusted code in a container or VM.
 
 **It cannot stop you approving a malicious prompt.** The touch is the last line of
 defence; if you approve prompts you did not initiate, the guarantees fall.
 
-**It does not protect a compromised forge or teammate.** Server-side rules — required
-signatures, protected branches, enforced 2FA — are complementary and Vaultkit cannot
-apply them for you.
+**It does not protect a compromised forge or teammate.** Server-side rules such as required
+signatures, protected branches and enforced 2FA are complementary, and Vaultkit
+cannot apply them for you.
 
 **It does not detect malware in general.** The Doctor inspects configuration state. The
-Scanner matches a specific, published indicator set — the PolinRider campaign's loaders,
-artifacts, packages and infrastructure — in mounted vaults, and shows that set's date.
+Scanner matches a specific, published indicator set in mounted vaults: the PolinRider
+campaign's loaders, artifacts, packages and infrastructure. It shows that set's date.
 Anything without an indicator in it is invisible to the Scanner.
 
 **When it acts, it acts inside the vault and keeps everything.** With auto-quarantine on
 (the default) a critical hit is neutralized as soon as it is found: an appended loader
 is cut at its injection line so the real config keeps working; a standalone artifact,
 weaponized task file or malicious package is moved whole. The original bytes go to
-`<vault>/.vaultkit/quarantine/<id>/` under a neutralized name with a record beside them —
-encrypted at rest with the rest of the vault, never outside the organization's
+`<vault>/.vaultkit/quarantine/<id>/` under a neutralized name with a record beside them.
+They stay encrypted at rest with the rest of the vault, never outside the organization's
 compartment, restorable and purgeable from the app. A dependency removal that would
 leave `package.json` unparseable is not written. Warnings are never auto-actioned.
 
@@ -80,15 +80,15 @@ leave `package.json` unparseable is not written. Warnings are never auto-actione
 
 | Operation | Mechanism | Privilege | Secret exposure |
 |---|---|---|---|
-| Key creation / listing | `sc_auth` | user | none — the key is born in the enclave |
-| Reference key export | `ssh-keygen -K` | user | none — a handle, useless alone |
+| Key creation / listing | `sc_auth` | user | none: the key is born in the enclave |
+| Reference key export | `ssh-keygen -K` | user | none: a handle, useless alone |
 | Vault create / mount / eject | `diskutil apfs` | user | passphrase (see below) |
 | Identity and signing config | direct file IO | user | none |
 | Host pinning, clone, auth test | `ssh`, `git` | user | signature via enclave + touch |
 | Prompt attribution | `ps`, `lsof` | user | none |
-| Indicator scan of mounted vaults | direct file IO, read-only | user | none — file bytes are matched, never sent or stored |
-| Quarantine / clean a hit | direct file IO inside the same vault | user | none — bytes move within the vault; the history records paths and indicator names only |
-| Destroy a vault / delete an identity | `diskutil apfs deleteVolume`, `sc_auth delete-ctk-identity` | user | none — typed confirmation, refused while mounted, verified against the system afterwards |
+| Indicator scan of mounted vaults | direct file IO, read-only | user | none: file bytes are matched, never sent or stored |
+| Quarantine / clean a hit | direct file IO inside the same vault | user | none: bytes move within the vault; the history records paths and indicator names only |
+| Destroy a vault / delete an identity | `diskutil apfs deleteVolume`, `sc_auth delete-ctk-identity` | user | none: typed confirmation, refused while mounted, verified against the system afterwards |
 
 **No component runs as root, and no privileged helper is installed.**
 
@@ -115,7 +115,7 @@ locally.
 
 Releases are distributed as a notarized DMG signed with a Developer ID certificate, and
 each release publishes the DMG's SHA-256. That proves the build came from the holder of
-that certificate and has not been altered in transit — it does **not** prove the binary
+that certificate and has not been altered in transit. It does **not** prove the binary
 was built from the source in this repository. No signature can.
 
 Building from source remains fully supported and is the higher-assurance path:

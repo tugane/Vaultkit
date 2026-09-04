@@ -112,7 +112,7 @@ struct GitConfigService {
     }
 }
 
-/// First non-blank of the candidates — pass the human fallback message last.
+/// First non-blank of the candidates: pass the human fallback message last.
 private func firstNonEmpty(_ values: String...) -> String {
     values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
           .first { !$0.isEmpty } ?? "unknown error"

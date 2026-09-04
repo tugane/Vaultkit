@@ -19,7 +19,7 @@ trap 'rm -rf "$WORK"' EXIT
 swift Resources/AppIcon/MakeIcon.swift "$WORK/icon_1024.png" >/dev/null
 
 mkdir -p "$WORK/Vaultkit.iconset"
-# name:pixels — the full set iconutil expects; anything missing and it refuses.
+# name:pixels. The full set iconutil expects; anything missing and it refuses.
 for spec in 16x16:16 16x16@2x:32 32x32:32 32x32@2x:64 128x128:128 \
             128x128@2x:256 256x256:256 256x256@2x:512 512x512:512 512x512@2x:1024; do
   name="${spec%%:*}"; px="${spec##*:}"

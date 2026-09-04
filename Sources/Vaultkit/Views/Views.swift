@@ -51,12 +51,12 @@ final class AppStore: ObservableObject {
     init() {
         history = historyStore.load()
 
-        // Populate at launch regardless of which scene shows first — the
+        // Populate at launch regardless of which scene shows first: the
         // menu-bar extra must not depend on the main window ever opening.
         Task { await runDoctor() }
 
         // Mount/eject can happen outside the app (work-on/work-off, Finder,
-        // Disk Utility) — refresh on the system's own mount notifications so
+        // Disk Utility): refresh on the system's own mount notifications so
         // the cards never show stale vault state.
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
@@ -65,7 +65,7 @@ final class AppStore: ObservableObject {
             }
         }
 
-        // NSWorkspace only notices /Volumes-scope mounts — canonical-path mounts
+        // NSWorkspace only notices /Volumes-scope mounts: canonical-path mounts
         // (diskutil -mountpoint ~/work/<org>, i.e. work-on and our own) bypass
         // it. A light poll keeps the cards honest; refresh is one diskutil call.
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -104,7 +104,7 @@ final class AppStore: ObservableObject {
 
     var compromiseIndicators: Int { scanFindings.filter { $0.severity == .critical }.count }
 
-    /// One pass, then — with auto-quarantine on — act on every critical hit
+    /// One pass, then: with auto-quarantine on: act on every critical hit
     /// and re-read what was touched, so the list shows the state *after* the
     /// fixes. The history records what was found and what was done.
     func runScan(deep: Bool = false) async {
@@ -253,7 +253,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Purge quarantined originals past their hold time. Only reaches mounted
-    /// vaults — items in a locked vault are ciphertext and simply wait for the
+    /// vaults. Items in a locked vault are ciphertext and simply wait for the
     /// next mount, which is the correct outcome either way.
     func sweepQuarantine() {
         let due = QuarantineService.expired(quarantine, now: Date(), ttl: Self.quarantineTTL)
@@ -272,7 +272,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Move a misplaced (e.g. Finder-mounted) volume to its canonical path,
-    /// or mount an unlocked one — passphrase-free while keys are cached.
+    /// or mount an unlocked one. Passphrase-free while keys are cached.
     /// Falls back to the sheet if the keys drop mid-way.
     func relocate(_ org: Organization) async {
         busyOrgs.insert(org.name)
@@ -356,12 +356,12 @@ final class AppStore: ObservableObject {
             return false
         }
         do {
-            creatingOrg = "Creating the Secure Enclave key — touch the sensor"
+            creatingOrg = "Creating the Secure Enclave key. Touch the sensor"
             if await !keys.labels().contains(org.keyLabel) {
                 try await keys.createIdentity(label: org.keyLabel)
             }
 
-            creatingOrg = "Exporting the reference key — touch the sensor"
+            creatingOrg = "Exporting the reference key. Touch the sensor"
             try await keys.exportReferenceKey(label: org.keyLabel, to: keyPath)
 
             creatingOrg = "Creating the encrypted vault"
@@ -434,7 +434,7 @@ final class AppStore: ObservableObject {
             } else if !deleteVault, org.vault != .none {
                 todo.append("The vault volume was kept; mount it with diskutil or add the organization again.")
             }
-            todo.append("Remove any Host block for this org in ~/.ssh/config and its line in allowed_signers — Vaultkit does not write those.")
+            todo.append("Remove any Host block for this org in ~/.ssh/config and its line in allowed_signers. Vaultkit does not write those.")
 
             await runDoctor()
             receipt = RemovalReceipt(org: org.displayName, done: done, todo: todo)
@@ -450,7 +450,7 @@ final class AppStore: ObservableObject {
 // MARK: - Vault state presentation (one place, palette-driven)
 
 extension VaultState {
-    /// Fill/icon colour — vivid.
+    /// Fill/icon colour: vivid.
     func color(_ p: Palette) -> Color {
         switch self {
         case .none: p.label3
@@ -461,7 +461,7 @@ extension VaultState {
         }
     }
 
-    /// Text colour — darkened in light mode so captions stay legible.
+    /// Text colour: darkened in light mode so captions stay legible.
     func textColor(_ p: Palette) -> Color {
         switch self {
         case .none: p.label3
@@ -512,7 +512,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         }
     }
 
-    /// The page's watermark glyph — decorative, and distinct from `icon`.
+    /// The page's watermark glyph: decorative, and distinct from `icon`.
     var backdropSymbol: String {
         switch self {
         case .dashboard: "shield.lefthalf.filled"
@@ -583,7 +583,7 @@ struct ContentView: View {
     }
 }
 
-/// Joins the parts of a subtitle, skipping any that are empty — an org with no
+/// Joins the parts of a subtitle, skipping any that are empty: an org with no
 /// org-level email (its identity may be repo-local) must not render "· key …".
 func detailLine(_ parts: String?...) -> String {
     parts.compactMap { $0 }
@@ -939,12 +939,12 @@ struct CloneSheet: View {
                 Text("Clone a repository")
                     .font(.system(size: 15, weight: .bold))
             }
-            // Multiple vaults can be mounted — the destination is an explicit choice.
+            // Multiple vaults can be mounted. The destination is an explicit choice.
             VStack(alignment: .leading, spacing: 6) {
                 FieldLabel("Into")
                 Picker("", selection: $selectedName) {
                     ForEach(store.cloneableOrgs) { o in
-                        Text("\(o.displayName)  (\(o.folderPath))\(o.vault == .unlocked ? "  — will mount first" : "")")
+                        Text("\(o.displayName)  (\(o.folderPath))\(o.vault == .unlocked ? "  (will mount first)" : "")")
                             .tag(o.name)
                     }
                 }
@@ -953,7 +953,7 @@ struct CloneSheet: View {
                 .font(.system(size: 13))
             }
             if let selected {
-                Text("Authenticates with \(selected.keyLabel) — expect a Touch ID prompt.")
+                Text("Authenticates with \(selected.keyLabel). Expect a Touch ID prompt.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(p.label2)
             }
@@ -969,8 +969,8 @@ struct CloneSheet: View {
                 HStack(spacing: 6) {
                     Image(systemName: pinned ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
                         .font(.system(size: 12, weight: .medium))
-                    Text(pinned ? "\(host) — host key pinned & verified"
-                                : "\(host) is NOT in known_hosts — verify and pin it before cloning")
+                    Text(pinned ? "\(host): host key pinned & verified"
+                                : "\(host) is NOT in known_hosts. Verify and pin it before cloning")
                         .font(.system(size: 12.5))
                 }
                 .foregroundStyle(pinned ? p.greenText : p.redText)
@@ -1083,7 +1083,7 @@ struct MenuBarView: View {
         ForEach(store.organizations) { org in
             switch org.vault {
             case .mounted:
-                Button("Eject \(org.displayName) — mounted") {
+                Button("Eject \(org.displayName) (mounted)") {
                     Task { await store.eject(org) }
                 }
             case .locked:
@@ -1093,15 +1093,15 @@ struct MenuBarView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
             case .unlocked:
-                Button("Secure \(org.displayName) — unlocked, not at rest") {
+                Button("Secure \(org.displayName) (unlocked, not at rest)") {
                     Task { await store.eject(org) }
                 }
             case .misplaced:
-                Button("Relocate \(org.displayName) — mounted in the wrong place") {
+                Button("Relocate \(org.displayName) (mounted in the wrong place)") {
                     Task { await store.relocate(org) }
                 }
             case .none:
-                Text("\(org.displayName) — no vault")
+                Text("\(org.displayName) (no vault)")
             }
         }
         Divider()

@@ -11,9 +11,9 @@ enum GitError: LocalizedError {
         case .invalidURL(let url):
             "\"\(url)\" doesn't look like an SSH clone URL (git@host:path or ssh://…)."
         case .hostNotPinned(let host):
-            "\(host) is not in your verified known_hosts. Verify its host-key fingerprints out-of-band and pin them before cloning — never on first use after an incident."
+            "\(host) is not in your verified known_hosts. Verify its host-key fingerprints out-of-band and pin them before cloning, never on first use after an incident."
         case .vaultNotMounted(let org):
-            "Mount the \(org) vault first — clones must land inside it, not on the bare disk."
+            "Mount the \(org) vault first. Clones must land inside it, not on the bare disk."
         case .cloneFailed(let detail):
             detail
         }
@@ -21,7 +21,7 @@ enum GitError: LocalizedError {
 }
 
 /// Clones repositories INTO an org's mounted vault with that org's enclave key.
-/// The URL, key, and destination are bound together by construction — the
+/// The URL, key, and destination are bound together by construction: the
 /// cross-org misrouting this app exists to prevent can't happen through here.
 final class GitService: @unchecked Sendable {
     private let runner: any SystemCommandRunning

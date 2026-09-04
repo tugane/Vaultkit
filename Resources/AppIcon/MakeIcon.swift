@@ -1,5 +1,5 @@
 // Renders Vaultkit's app icon at 1024x1024: a navy squircle carrying one bold
-// white mark. Flat by design — no grain and no glow — which is what keeps it a
+// white mark. It is flat by design, with no grain and no glow, which is what keeps it a
 // sibling of Auger's icon rather than a different visual family.
 //
 // The artwork sits on Apple's macOS icon grid: an 816pt shape inside the 1024pt
@@ -32,7 +32,7 @@ let SHAPE = CGRect(x: INSET, y: INSET, width: S - INSET * 2, height: S - INSET *
 /// whatever the grid leaves us, so the mark keeps its proportions.
 let k = SHAPE.width / 1024
 
-/// Superellipse — the continuous corner Apple's icon grid uses.
+/// Superellipse: the continuous corner Apple's icon grid uses.
 func squircle(_ r: CGRect, n: Double = 8) -> CGPath {
     let p = CGMutablePath()
     let cx = r.midX, cy = r.midY, a = r.width / 2, b = r.height / 2

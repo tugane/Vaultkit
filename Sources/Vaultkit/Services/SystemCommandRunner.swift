@@ -7,7 +7,7 @@ struct CommandResult {
 }
 
 /// The single place in Vaultkit that spawns subprocesses (see data-flow.md).
-/// Absolute tool paths only — never resolves via PATH, so a malicious shim
+/// Absolute tool paths only: never resolves via PATH, so a malicious shim
 /// earlier in the user's PATH can't intercept a privileged-ish operation.
 final class ProcessRunner: SystemCommandRunning, @unchecked Sendable {
 

@@ -28,13 +28,13 @@ enum ForgeKind: String, Codable, CaseIterable, Identifiable {
 enum VaultState: String, Codable {
     case none        // org folder lives on the plain disk (no vault)
     case locked      // volume exists, keys dropped (data at rest)
-    case unlocked    // keys cached but not mounted (e.g. TM snapshot) — NOT at rest
+    case unlocked    // keys cached but not mounted (e.g. TM snapshot): NOT at rest
     case mounted     // volume unlocked and mounted at the org folder
     case misplaced   // mounted, but NOT at the org folder (e.g. Finder's /Volumes/<Name>)
 }
 
 /// One organization the user works for. This struct is a *view* of the real
-/// configuration on disk (gitconfig includes, ssh keys, APFS volumes) — never
+/// configuration on disk (gitconfig includes, ssh keys, APFS volumes): never
 /// a competing source of truth. The Doctor re-derives it from the system.
 struct Organization: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
@@ -85,9 +85,9 @@ struct ScanFinding: Identifiable, Hashable {
     var repo: String                 // nearest enclosing git repository
     var path: String                 // relative to the org folder
     var absolutePath: String
-    var indicator: String            // "PolinRider loader — original variant"
+    var indicator: String            // "PolinRider loader: original variant"
     var severity: DoctorFinding.Severity
-    var evidence: String             // the marker matched — never payload bytes
+    var evidence: String             // the marker matched: never payload bytes
     var remediation: String
     var fix: Fix = .manual
 }
@@ -104,7 +104,7 @@ struct ScanEvent: Identifiable, Codable, Hashable {
     var hits: Int
 }
 
-/// Something the Scanner did — or could not do — about a finding.
+/// Something the Scanner did, or could not do: about a finding.
 struct ActionEvent: Identifiable, Codable, Hashable {
     enum Kind: String, Codable { case cleaned, quarantined, restored, purged, manual }
     var id: UUID = UUID()

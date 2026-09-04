@@ -1,7 +1,7 @@
 import SwiftUI
 import TuganeDesign
 
-/// UC8: offboard an organization. The default is reversible — only the git
+/// UC8: offboard an organization. The default is reversible: only the git
 /// routing goes. Destroying the vault or the enclave key is opt-in, and the
 /// vault needs its name typed back.
 struct RemoveOrgSheet: View {
@@ -26,7 +26,7 @@ struct RemoveOrgSheet: View {
                 Text("Remove \(org.displayName)").font(.system(size: 15, weight: .bold))
             }
 
-            Text("Removes the git rules that route \(org.folderPath) to this identity. The vault and its Secure Enclave key are kept unless you choose otherwise — add the organization again later and both are picked up as they were.")
+            Text("Removes the git rules that route \(org.folderPath) to this identity. The vault and its Secure Enclave key are kept unless you choose otherwise. Add the organization again later and both are picked up as they were.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(p.label2)
                 .lineSpacing(3)

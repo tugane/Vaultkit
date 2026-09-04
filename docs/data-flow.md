@@ -1,4 +1,4 @@
-# Vaultkit — Data Flow & Architecture
+# Vaultkit: Data Flow & Architecture
 
 ## Layers
 
@@ -53,10 +53,10 @@ flowchart TB
 **Rules encoded in the layering:**
 
 - The UI never touches the system; it calls services. Services never render UI.
-- `SystemCommandRunning` is the single choke point for subprocess execution —
+- `SystemCommandRunning` is the single choke point for subprocess execution:
   auditable, mockable, and the natural place for the "preview every command" hook.
 - Nothing in any layer stores secrets. The two dotted edges are where secrets
-  exist — inside Apple's dialogs, invisible to the app (invariant I1).
+  exist: inside Apple's dialogs, invisible to the app (invariant I1).
 
 ## Sources of truth
 
@@ -66,14 +66,14 @@ flowchart TB
 | SSH key handles | Secure Enclave + `~/.ssh/id_*` reference files | derived (labels only) |
 | Host pins | `~/.ssh/known_hosts` | derived |
 | Vault state | APFS container (`diskutil`) | derived, polled |
-| Org registry (names, forge hosts, folder paths) | `~/Library/Application Support/Vaultkit/orgs.json` | **owned** — contains no secrets |
-| Scanner history (passes, actions) | `~/Library/Application Support/Vaultkit/scanner-history.json` | **owned** — org names, repo-relative paths, indicator names; never file contents |
-| Quarantined bytes | `<vault>/.vaultkit/quarantine/<id>/` | **owned**, but inside the org's own encrypted vault — never outside its compartment |
+| Org registry (names, forge hosts, folder paths) | `~/Library/Application Support/Vaultkit/orgs.json` | **owned**: contains no secrets |
+| Scanner history (passes, actions) | `~/Library/Application Support/Vaultkit/scanner-history.json` | **owned**: org names, repo-relative paths, indicator names; never file contents |
+| Quarantined bytes | `<vault>/.vaultkit/quarantine/<id>/` | **owned**, but inside the org's own encrypted vault: never outside its compartment |
 
 If `orgs.json` is deleted, the Doctor can reconstruct organizations by scanning
-the gitconfig includes — the app degrades gracefully (invariant I2).
+the gitconfig includes: the app degrades gracefully (invariant I2).
 
-## Flow 1 — Add organization (UC1/UC2)
+## Flow 1. Add organization (UC1/UC2)
 
 ```mermaid
 sequenceDiagram
@@ -107,7 +107,7 @@ sequenceDiagram
     W->>U: verified ✓ (greeting shown as proof)
 ```
 
-## Flow 2 — Vault lifecycle (UC4/UC5)
+## Flow 2: Vault lifecycle (UC4/UC5)
 
 ```mermaid
 sequenceDiagram
@@ -136,7 +136,7 @@ sequenceDiagram
     V->>S: apfs lockVolume
     alt dissenters (user-level)
         V->>V: lsof → name holders
-        V-->>U: "Terminal tab in ~/work/globex" — close & retry
+        V-->>U: "Terminal tab in ~/work/globex". Close & retry
     else dissenters (root-level: Spotlight/AV)
         V->>V: empty lsof + lock failure ⇒ infer root holder
         V->>S: retry with backoff, fall back to unmount
@@ -146,7 +146,7 @@ sequenceDiagram
     V-->>M: state = locked (at rest)
 ```
 
-## Flow 3 — Doctor (UC6)
+## Flow 3: Doctor (UC6)
 
 ```mermaid
 flowchart LR
@@ -161,7 +161,7 @@ flowchart LR
     U --> X[Apply via services<br/>never silently]
 ```
 
-## Flow 4 — Scanner (UC12)
+## Flow 4: Scanner (UC12)
 
 ```mermaid
 flowchart LR
@@ -181,8 +181,8 @@ flowchart LR
     E[Vault ejected] --> D[Drop that org's findings + baseline]
 ```
 
-The Scanner is the one component that reads inside vaults, and — with
-auto-quarantine on — the one that writes there. The scan itself only compares
+The Scanner is the one component that reads inside vaults, and: with
+auto-quarantine on. The one that writes there. The scan itself only compares
 bytes and never sends or stores what it reads. Acting is a separate, logged
 step that moves bytes *within* the same vault and never destroys them; restore
 and purge are explicit. Change detection uses ctime because the campaign's own
@@ -192,17 +192,17 @@ tooling forges mtime.
 
 | Operation | Tool | Privilege | Secret exposure |
 |---|---|---|---|
-| Create/list/delete enclave identity | `sc_auth` | user | none — key born in enclave |
-| Export reference key | `ssh-keygen -K` | user | none — handle file, useless without enclave+touch |
+| Create/list/delete enclave identity | `sc_auth` | user | none: key born in enclave |
+| Export reference key | `ssh-keygen -K` | user | none: handle file, useless without enclave+touch |
 | Read/patch git & ssh config | direct file IO | user | none |
 | Create encrypted volume | `diskutil apfs addVolume -passprompt` | user (Owners enabled) | passphrase in system prompt only |
 | Mount/eject vault | `diskutil apfs unlock/lockVolume` | user | same |
 | Auth verification | `ssh -T` | user | signature via enclave + touch |
 | Host scan / forge probe | `ssh-keyscan`, HTTPS GET | user | none (public data) |
 | Prompt attribution | `ps`, `lsof` | user (root holders inferred, not seen) | none |
-| Indicator scan | direct file IO in mounted vaults, read-only | user | none — bytes matched in memory, nothing transmitted |
-| Quarantine / clean | direct file IO within the same vault | user | none — originals kept in the vault's quarantine; history holds paths and names only |
-| Destroy vault | `diskutil apfs deleteVolume` | user (Owners enabled) | none — refused while mounted, verified by re-listing |
+| Indicator scan | direct file IO in mounted vaults, read-only | user | none. Bytes matched in memory, nothing transmitted |
+| Quarantine / clean | direct file IO within the same vault | user | none. Originals kept in the vault's quarantine; history holds paths and names only |
+| Destroy vault | `diskutil apfs deleteVolume` | user (Owners enabled) | none: refused while mounted, verified by re-listing |
 
 ### Passphrase entry paths (honest note on I1)
 
@@ -216,14 +216,14 @@ terminal (`-passprompt`), exactly like the manual flow.
 
 **No component runs as root.** No privileged helper is installed. The app is
 sandboxed-hostile territory (it must touch `~/.ssh` and run `diskutil`), so it
-ships **unsandboxed but hardened-runtime, signed and notarized** — and open
+ships **unsandboxed but hardened-runtime, signed and notarized**, and open
 source, because its audience will (rightly) read the code before trusting it.
 
 That also rules out the Mac App Store, permanently. The store mandates the App
 Sandbox, and a sandboxed process's children inherit it: `diskutil` could not
 create, mount or lock a volume, `sc_auth` could not mint an enclave identity,
 and `~/.ssh` and `~/.gitconfig` would sit outside the app's container.
-Privileged helpers are banned there too, so there is no escape hatch — every
+Privileged helpers are banned there too, so there is no escape hatch: every
 privileged thing this app does is precisely what the sandbox exists to
 prevent. Distribution is direct, by notarized DMG.
 
@@ -236,10 +236,10 @@ prevent. Distribution is direct, by notarized DMG.
 5. **Forge quirks** → SSH on non-standard ports (Gitea built-in server), GitLab's signing-key re-add restriction, GitHub SSO authorize buttons: encoded per-forge, verified by the live auth test rather than assumed.
 6. **Deleted app state** → orgs.json is reconstructable from the system (I2).
 7. **Backup software interaction** → Time Machine snapshots can hold a vault
-   *unlocked after unmount* (plain mount then needs no passphrase — handle the
+   *unlocked after unmount* (plain mount then needs no passphrase: handle the
    `-69589 not locked` path), and an **included vault path copies plaintext to
    the backup destination** while mounted. Worse: **`lockVolume` reports
-   success while a mounted snapshot still references the keys** — the volume
+   success while a mounted snapshot still references the keys**: the volume
    silently stays unlocked, so every lock must be verified afterwards (evict
    snapshot mounts, relock, re-check) before claiming "at rest". The Doctor
    must check: vault paths excluded from backups, or the destination encrypted.

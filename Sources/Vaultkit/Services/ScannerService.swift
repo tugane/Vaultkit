@@ -22,8 +22,8 @@ enum PolinRiderIndicators {
 
     /// Each of these is definitive on its own (0 false positives in OSM's sampling).
     static let payloadMarkers: [Marker] = [
-        Marker(text: "rmcej%otb%", name: "PolinRider loader — original variant (rmcej%otb%)"),
-        Marker(text: "Cot%3t=shtP", name: "PolinRider loader — rotated variant (Cot%3t=shtP)"),
+        Marker(text: "rmcej%otb%", name: "PolinRider loader: original variant (rmcej%otb%)"),
+        Marker(text: "Cot%3t=shtP", name: "PolinRider loader: rotated variant (Cot%3t=shtP)"),
         Marker(text: "_$_1e42", name: "PolinRider decoder function (_$_1e42)"),
     ]
 
@@ -39,10 +39,10 @@ enum PolinRiderIndicators {
     /// Second-stage dead-drop and bootstrap infrastructure. Specific enough
     /// that a match in any file is a finding.
     static let c2Markers: [Marker] = [
-        Marker(text: "TMfKQEd7TJJa5xNZJZ2Lep838vrzrs7mAP", name: "PolinRider C2 — TRON dead-drop (primary)"),
-        Marker(text: "TXfxHUet9pJVU1BgVkBAbrES4YUc1nGzcG", name: "PolinRider C2 — TRON dead-drop (secondary)"),
-        Marker(text: "0xbe037400670fbf1c32364f762975908dc43eeb38759263e7dfcdabc76380811e", name: "PolinRider C2 — Aptos dead-drop (primary)"),
-        Marker(text: "0x3f0e5781d0855fb460661ac63257376db1941b2bb522499e4757ecb3ebd5dce3", name: "PolinRider C2 — Aptos dead-drop (secondary)"),
+        Marker(text: "TMfKQEd7TJJa5xNZJZ2Lep838vrzrs7mAP", name: "PolinRider C2: TRON dead-drop (primary)"),
+        Marker(text: "TXfxHUet9pJVU1BgVkBAbrES4YUc1nGzcG", name: "PolinRider C2: TRON dead-drop (secondary)"),
+        Marker(text: "0xbe037400670fbf1c32364f762975908dc43eeb38759263e7dfcdabc76380811e", name: "PolinRider C2: Aptos dead-drop (primary)"),
+        Marker(text: "0x3f0e5781d0855fb460661ac63257376db1941b2bb522499e4757ecb3ebd5dce3", name: "PolinRider C2: Aptos dead-drop (secondary)"),
         Marker(text: "2[gWfGj;<:-93Z^C", name: "PolinRider XOR key (primary)"),
         Marker(text: "m6:tTh^D)cBz?NM]", name: "PolinRider XOR key (secondary)"),
         Marker(text: "260120.vercel.app", name: "PolinRider bootstrap host (260120.vercel.app)"),
@@ -64,7 +64,7 @@ enum PolinRiderIndicators {
     ]
 
     /// Files the loader is appended to. Checked wherever they occur, not only
-    /// at the repo root — many victims are infected only in nested paths.
+    /// at the repo root. Many victims are infected only in nested paths.
     static func isTargetConfig(_ name: String) -> Bool {
         let stems = ["postcss.config", "tailwind.config", "eslint.config", "next.config",
                      "babel.config", "jest.config", "vite.config", "vitest.config",
@@ -87,7 +87,7 @@ enum PolinRiderIndicators {
 /// Watches every mounted vault for the campaign's indicators (UC12).
 ///
 /// The scan itself only reads: it opens files and matches bytes. Acting on a
-/// hit is a separate, logged step (QuarantineService). Incremental between ticks — a file is re-read only if its
+/// hit is a separate, logged step (QuarantineService). Incremental between ticks. A file is re-read only if its
 /// content *or inode* changed since the vault's last pass. Change detection is
 /// on ctime as well as mtime because the campaign's own propagation script
 /// rewinds the clock to forge timestamps: mtime can be set from user space,
@@ -121,7 +121,7 @@ actor ScannerService {
         ".git", "node_modules", ".build", "build", "dist", "out", ".next", ".nuxt",
         ".svelte-kit", ".cache", ".turbo", ".parcel-cache", "coverage", ".pnpm-store",
         "Pods", "DerivedData", ".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems",
-        ".vaultkit",                      // our own quarantine — never rescan it
+        ".vaultkit",                      // our own quarantine. Never rescan it
     ]
 
     /// Largest file the byte matcher will read. Config files are kilobytes;
@@ -188,7 +188,7 @@ actor ScannerService {
     private func scanOrg(_ org: Organization, since: Date?, deep: Bool) -> OrgResult {
         // The enumerator yields canonical paths (/private/var/…) whatever it was
         // handed, so canonicalize the root the same way or relative paths are
-        // cut at the wrong offset. realpath(3), not resolvingSymlinksInPath —
+        // cut at the wrong offset. realpath(3), not resolvingSymlinksInPath:
         // Foundation's strips /private and lands on the other side of the gap.
         let root = URL(fileURLWithPath: Self.canonical((org.folderPath as NSString).expandingTildeInPath))
         var result = OrgResult()
@@ -254,7 +254,7 @@ actor ScannerService {
     }
 
     /// Nearest enclosing git repository, found by walking up from the file
-    /// rather than from enumeration order — a directory's `.git` is not
+    /// rather than from enumeration order: a directory's `.git` is not
     /// guaranteed to be visited before its siblings. Memoized per directory.
     private struct RepoRoots {
         let top: String
@@ -366,11 +366,11 @@ actor ScannerService {
         var hits = PolinRiderIndicators.payloadMarkers.filter { data.contains($0.text) }
         let I = PolinRiderIndicators.self
         if data.contains(I.v1Global), I.v1Seeds.contains(where: data.contains) {
-            hits.append(.init(text: "global['!'] + seed", name: "PolinRider loader — original variant (structure)"))
+            hits.append(.init(text: "global['!'] + seed", name: "PolinRider loader: original variant (structure)"))
         }
         if data.contains(I.v2Global),
            I.v2Seeds.contains(where: data.contains) || data.contains(I.v2Decoder) {
-            hits.append(.init(text: "global['_V'] + seed/decoder", name: "PolinRider loader — rotated variant (structure)"))
+            hits.append(.init(text: "global['_V'] + seed/decoder", name: "PolinRider loader: rotated variant (structure)"))
         }
         if data.contains(I.globalRequire), data.contains(I.globalModule),
            (I.v1Seeds + I.v2Seeds).contains(where: data.contains) {
@@ -430,19 +430,19 @@ actor ScannerService {
     }
 }
 
-/// What to do about each class of hit — OSM's remediation, in the order that
+/// What to do about each class of hit. OSM's remediation, in the order that
 /// matters. Vaultkit never edits repository files itself.
 enum Remedy {
     static let payload = "Delete everything appended after the legitimate config, from the injected line that starts with global[ to the end of the file. Check the last commits for an amend that carried it, and rotate every secret that was in the environment during a build."
     static let propagation = "Direct evidence of compromise even if the payload was cleaned. Delete it, rotate credentials, inspect the reflog for amended commits, and check global npm packages and editor extensions for the dropper."
-    static let gitignore = "Remove the config.bat line — the malware adds it to keep its orchestrator out of diffs."
+    static let gitignore = "Remove the config.bat line. The malware adds it to keep its orchestrator out of diffs."
     static let dependency = "Remove the package, delete node_modules and the lockfile entry, and treat any machine that ever installed it as compromised."
-    static let tasks = "Delete the task. With runOn: folderOpen it runs the moment an editor opens this folder — do not open it in VS Code until it is gone."
+    static let tasks = "Delete the task. With runOn: folderOpen it runs the moment an editor opens this folder. Do not open it in VS Code until it is gone."
     static let font = "A file named like a font that is not one. The campaign hides loaders in .woff2 files; remove it and find what imports it."
 }
 
 extension Data {
-    /// Byte-level substring test — files are matched raw, so binary content
+    /// Byte-level substring test. Files are matched raw, so binary content
     /// and invalid UTF-8 never derail a scan.
     func contains(_ needle: String) -> Bool {
         range(of: Data(needle.utf8)) != nil

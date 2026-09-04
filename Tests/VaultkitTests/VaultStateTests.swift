@@ -68,7 +68,7 @@ final class VaultStateTests: XCTestCase {
     }
 
     /// Mounted somewhere other than the org folder means the org's git identity,
-    /// direnv and registry config never activate — a distinct state, not "mounted".
+    /// direnv and registry config never activate: a distinct state, not "mounted".
     func testMountedAtWrongPathIsMisplaced() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Me", locked: false, mountPoint: "/Volumes/Me"))]
@@ -90,7 +90,7 @@ final class VaultStateTests: XCTestCase {
     }
 
     /// diskutil's plist omits MountPoint for anything mounted outside /Volumes,
-    /// which is every vault. The kernel's mount table is the tie-breaker — and
+    /// which is every vault. The kernel's mount table is the tie-breaker: and
     /// it must never turn a plain unmounted volume into a mounted one.
     func testKernelMountTableFillsInWhatDiskutilOmits() async throws {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -128,7 +128,7 @@ final class VaultStateTests: XCTestCase {
         let service = DiskUtilVaultService(runner: runner, mountTable: { [:] })
 
         // The post-lock verification can't succeed against a static fake, so the
-        // call is expected to throw — what matters is that it TRIED to lock.
+        // call is expected to throw. What matters is that it TRIED to lock.
         _ = try? await service.eject(org("me", folder: "~/work/me"))
         XCTAssertTrue(runner.didAttemptLock, "eject must lock a key-cached volume")
     }
@@ -149,7 +149,7 @@ final class VaultStateTests: XCTestCase {
 
 /// The guard's whole job is to make the *placeholder* unwritable. Applied over a
 /// live mount it rewrites the volume ROOT's mode, which is stored inside the
-/// volume — so every later mount comes back unreadable. diskutil can report a
+/// volume, so every later mount comes back unreadable. diskutil can report a
 /// successful lock while the volume is still mounted, which is how this fired.
 final class GuardSafetyTests: XCTestCase {
     private var root: String!
@@ -189,7 +189,7 @@ final class GuardSafetyTests: XCTestCase {
     }
 
     /// A vault mounted at its canonical path must survive an eject attempt that
-    /// fails to actually unmount it — permissions untouched, not zeroed.
+    /// fails to actually unmount it: permissions untouched, not zeroed.
     func testGuardLeavesAMountedVaultReadable() async throws {
         let runner = FakeRunner()
         runner.responses = [("apfs list", FakeRunner.plist(name: "Live", locked: false, mountPoint: "/"))]

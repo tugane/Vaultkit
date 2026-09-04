@@ -6,8 +6,8 @@ import CryptoKit
 // The Scanner finds; this acts. Two rules make it safe to run unattended:
 //
 //  1. Nothing is destroyed. A cleaned file's original and a moved file both
-//     land in the org's quarantine, inside that org's vault — encrypted at
-//     rest, never outside the compartment — under a neutralized name, with a
+//     land in the org's quarantine, inside that org's vault: encrypted at
+//     rest, never outside the compartment: under a neutralized name, with a
 //     record beside them. Restore and purge are both explicit.
 //  2. A config file keeps working. The loader is *appended* after the real
 //     config, so cleaning truncates at the injection line and keeps what was
@@ -257,7 +257,7 @@ struct QuarantineService {
 // MARK: - History
 //
 // The one file Vaultkit owns besides nothing: what the Scanner did and when.
-// Contains org names, repo-relative paths and indicator names — no secrets,
+// Contains org names, repo-relative paths and indicator names: no secrets,
 // no file contents.
 
 struct HistoryStore {

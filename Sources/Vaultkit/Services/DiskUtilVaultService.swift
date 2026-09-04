@@ -14,7 +14,7 @@ enum VaultError: LocalizedError {
             "Unlock failed: \(detail)"
         case .busy(let holders):
             holders.isEmpty
-                ? "The vault is busy — likely Spotlight indexing or an antivirus scan (root processes). It usually frees up within a minute."
+                ? "The vault is busy, likely Spotlight indexing or an antivirus scan (root processes). It usually frees up within a minute."
                 : "The vault is held open by: \(holders.joined(separator: ", ")). Close them (or cd out) and retry."
         case .commandFailed(let detail):
             detail
@@ -46,7 +46,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
 
     /// The kernel's own mount table, one syscall. Needed because
     /// `diskutil apfs list -plist` omits MountPoint for a volume mounted
-    /// anywhere but /Volumes — exactly where every vault lives — while its
+    /// anywhere but /Volumes. Exactly where every vault lives: while its
     /// text output and `diskutil info` both report it. Snapshot mounts carry
     /// a "…@/dev/diskN" source and so never collide with the bare device key.
     static func kernelMountTable() -> [String: String] {
@@ -145,7 +145,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
         throw VaultError.commandFailed("Use createVault(for:volumeName:passphrase:).")
     }
 
-    /// The Mac's main APFS container — the one holding the system Data volume.
+    /// The Mac's main APFS container: the one holding the system Data volume.
     func primaryContainer() async throws -> String {
         let r = try await runner.run(diskutil, ["apfs", "list", "-plist"])
         guard r.status == 0, let data = r.stdout.data(using: .utf8),
@@ -166,7 +166,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
 
     /// Create the org's encrypted volume and mount it at its canonical path.
     /// The passphrase transits app memory once, piped to -stdinpassphrase, and
-    /// is never persisted (documented I1 deviation — see data-flow.md).
+    /// is never persisted (documented I1 deviation. See data-flow.md).
     func createVault(for org: Organization, volumeName: String, passphrase: String) async throws {
         let existing = (try? await listVolumes()) ?? []
         guard !existing.contains(where: { $0.name.lowercased() == volumeName.lowercased() }) else {
@@ -210,7 +210,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
 
         openGuard(at: canonical)
 
-        // When keys are cached (unlocked-but-unmounted — TM snapshots, or the
+        // When keys are cached (unlocked-but-unmounted: TM snapshots, or the
         // unmount above) a plain mount needs no passphrase. Only try it in that
         // state: on a locked volume it can only fail (or prompt interactively).
         if !vol.locked {
@@ -238,7 +238,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
         let canonical = expand(org.folderPath)
 
         guard let mountPoint = vol.mountPoint else {
-            // Not mounted — but cached keys mean the data is NOT at rest.
+            // Not mounted, but cached keys mean the data is NOT at rest.
             // Lock to drop them; only then is the eject honest.
             if !vol.locked {
                 let r = try await runner.run(diskutil, ["apfs", "lockVolume", vol.deviceIdentifier])
@@ -263,7 +263,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
             if r.status != 0 {
                 r = try await runner.run(diskutil, ["unmount", mountPoint])
                 if r.status == 0 {
-                    // Unmount alone can leave keys cached — best-effort lock.
+                    // Unmount alone can leave keys cached: best-effort lock.
                     _ = try? await runner.run(diskutil, ["apfs", "lockVolume", vol.deviceIdentifier])
                 }
             }
@@ -274,7 +274,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     }
 
     /// diskutil lockVolume can report success while a mounted Time Machine
-    /// snapshot still references the volume's keys — the volume silently stays
+    /// snapshot still references the volume's keys. The volume silently stays
     /// unlocked. Verify, evict snapshot mounts, relock, and only then believe it.
     private func ensureLocked(_ device: String) async throws {
         if await isLocked(device) { return }
@@ -287,7 +287,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
         }
         _ = try? await runner.run(diskutil, ["apfs", "lockVolume", device])
         guard await isLocked(device) else {
-            throw VaultError.commandFailed("The volume still reports unlocked after locking — a Time Machine snapshot or other system service is holding its keys. Try again in a minute.")
+            throw VaultError.commandFailed("The volume still reports unlocked after locking. A Time Machine snapshot or other system service is holding its keys. Try again in a minute.")
         }
     }
 
@@ -297,7 +297,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     }
 
     /// Destroy the org's volume and everything in it (UC8). Refuses while
-    /// mounted — the caller ejects first, so dissenters get named rather than
+    /// mounted: the caller ejects first, so dissenters get named rather than
     /// force-unmounted. diskutil can exit 0 on failure, so the volume list is
     /// re-read and the deletion is only believed once the volume is gone.
     func deleteVault(for org: Organization) async throws {
@@ -339,7 +339,7 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     // locked, so nothing lands on the bare disk to be shadowed at mount time.
     // It must never touch a mounted volume: chmod follows the path, so closing
     // the guard over a live mount rewrites the volume ROOT's permissions, and
-    // that mode is stored inside the volume — every future mount comes back
+    // that mode is stored inside the volume. Every future mount comes back
     // unreadable. diskutil can report a successful lock while the volume is
     // still mounted, so "we just locked it" is not evidence enough; check.
 

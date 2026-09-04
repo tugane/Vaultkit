@@ -38,7 +38,7 @@ echo "==> tests"
 # exit code with it, so assert on the reported results instead.
 swift test > /tmp/vaultkit-release-test.log 2>&1 || true
 if ! grep -qE "Executed [0-9]+ tests, with 0 failures" /tmp/vaultkit-release-test.log; then
-  echo "tests failed — see /tmp/vaultkit-release-test.log" >&2
+  echo "tests failed. See /tmp/vaultkit-release-test.log" >&2
   tail -30 /tmp/vaultkit-release-test.log >&2
   exit 1
 fi

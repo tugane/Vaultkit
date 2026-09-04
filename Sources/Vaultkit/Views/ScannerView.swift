@@ -102,7 +102,7 @@ struct ScannerView: View {
                  text: "The Scanner reads mounted vaults only. Mount one and it gets a full pass, then changed files are re-checked every \(Int(AppStore.scanInterval / 60)) minutes for as long as it stays mounted.")
         } else if store.scanFindings.isEmpty {
             note(symbol: "checkmark.shield.fill", title: "No indicators found",
-                 text: "Nothing in \(plural(mounted.count, "mounted vault")) matches the PolinRider indicator set. Not a clean bill of health — only the absence of what this Scanner knows to look for.")
+                 text: "Nothing in \(plural(mounted.count, "mounted vault")) matches the PolinRider indicator set. Not a clean bill of health, only the absence of what this Scanner knows to look for.")
         } else {
             ForEach(groups, id: \.key) { group in
                 SectionLabel(group.key)
@@ -118,7 +118,7 @@ struct ScannerView: View {
 
     @ViewBuilder
     private var quarantineList: some View {
-        Text("Quarantine lives inside each vault at .vaultkit/quarantine, so held bytes stay encrypted at rest and never leave the organization. Originals are purged automatically \(plural(Int(AppStore.quarantineTTL / 60), "minute")) after they are set aside — restore inside that window is the only way to get a file back. A locked vault's quarantine is untouched until it is mounted again.")
+        Text("Quarantine lives inside each vault at .vaultkit/quarantine, so held bytes stay encrypted at rest and never leave the organization. Originals are purged automatically \(plural(Int(AppStore.quarantineTTL / 60), "minute")) after they are set aside. Restore inside that window is the only way to get a file back. A locked vault's quarantine is untouched until it is mounted again.")
             .font(.system(size: 12.5))
             .foregroundStyle(p.label2)
             .lineSpacing(3)
@@ -143,7 +143,7 @@ struct ScannerView: View {
     private var historyList: some View {
         if store.history.actions.isEmpty && store.history.scans.isEmpty {
             note(symbol: "clock", title: "No history yet",
-                 text: "Every pass and every action is recorded here — what was scanned, what was found, what was cut, moved, restored or purged.")
+                 text: "Every pass and every action is recorded here: what was scanned, what was found, what was cut, moved, restored or purged.")
         } else {
             if !store.history.actions.isEmpty {
                 SectionLabel("Actions").padding(.top, 4).padding(.bottom, 4)
@@ -349,7 +349,7 @@ struct QuarantineRow: View {
     private var expiry: String {
         let left = Int(AppStore.quarantineTTL - Date().timeIntervalSince(item.date))
         if left <= 0 { return "purging now" }
-        if left < 60 { return "purges in \(left)s — restore now or it is gone" }
+        if left < 60 { return "purges in \(left)s. Restore now or it is gone" }
         return "purges in \(plural(left / 60 + 1, "minute"))"
     }
 
@@ -420,7 +420,7 @@ struct ActionRow: View {
                 .foregroundStyle(color)
                 .frame(width: 24, height: 20)
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(action.kind.rawValue.capitalized) — \(action.indicator)")
+                Text("\(action.kind.rawValue.capitalized): \(action.indicator)")
                     .font(.system(size: 13, weight: .medium))
                 Text("\(action.orgName)/\(action.path)")
                     .font(.system(size: 12).monospaced())

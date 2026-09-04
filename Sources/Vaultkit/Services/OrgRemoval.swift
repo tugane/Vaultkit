@@ -9,8 +9,8 @@ import Foundation
 
 extension GitConfigService {
 
-    /// Drop every includeIf block that routes to the org's config file — the
-    /// ~/work/<org>/ rule and any /Volumes/<Name>/ fallback — then delete the
+    /// Drop every includeIf block that routes to the org's config file: the
+    /// ~/work/<org>/ rule and any /Volumes/<Name>/ fallback, then delete the
     /// file. Everything else in ~/.gitconfig is preserved byte for byte.
     func removeOrganization(_ org: Organization) throws {
         let path = "\(home)/.gitconfig"

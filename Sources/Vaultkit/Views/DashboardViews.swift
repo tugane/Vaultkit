@@ -25,7 +25,7 @@ struct DashboardView: View {
             return "The scanner matched \(plural(indicators, "PolinRider indicator")) in a mounted vault. Treat every credential present during a build there as exposed, and do not open that folder in an editor until it is clean."
         }
         return exposed == 0
-            ? "All organization data is ciphertext. Mount a vault when you're ready to work — every unlock, commit and push asks for your touch."
+            ? "All organization data is ciphertext. Mount a vault when you're ready to work. Every unlock, commit and push asks for your touch."
             : "Exposed vaults are readable by anything running on this Mac. Secure what you're not actively using."
     }
 
@@ -113,7 +113,7 @@ struct DashboardView: View {
 struct ScoreCard: View {
     let score: Int
     let findings: [DoctorFinding]
-    var indicators: Int = 0            // Scanner criticals — outrank everything
+    var indicators: Int = 0            // Scanner criticals. Outrank everything
     @Environment(\.palette) private var p
 
     private var ringColor: Color {
