@@ -34,6 +34,9 @@ final class AppStore: ObservableObject {
 
     /// How often mounted vaults are re-checked for changed files.
     static let scanInterval: TimeInterval = 300
+    /// How long a quarantined original is held before it is purged for good.
+    /// Restore is only possible inside this window.
+    static let quarantineTTL: TimeInterval = 600
     private var mountedNames: Set<String> = []
 
     let vaults = DiskUtilVaultService()
@@ -242,6 +245,30 @@ final class AppStore: ObservableObject {
             mountedNames = nowMounted
             Task { await runScan() }
         }
+
+        // Runs on the 10-second refresh rather than the scan tick, so the hold
+        // time is honoured to the second and the countdown in the UI ticks.
+        reloadQuarantine()
+        sweepQuarantine()
+    }
+
+    /// Purge quarantined originals past their hold time. Only reaches mounted
+    /// vaults — items in a locked vault are ciphertext and simply wait for the
+    /// next mount, which is the correct outcome either way.
+    func sweepQuarantine() {
+        let due = QuarantineService.expired(quarantine, now: Date(), ttl: Self.quarantineTTL)
+        guard !due.isEmpty else { return }
+        let minutes = Int(Self.quarantineTTL / 60)
+        for item in due {
+            guard let org = organizations.first(where: { $0.name == item.orgName }) else { continue }
+            let root = (org.folderPath as NSString).expandingTildeInPath
+            guard let event = try? quarantineService.purge(
+                item, vaultRoot: root,
+                detail: "Purged automatically \(plural(minutes, "minute")) after quarantine.") else { continue }
+            history.actions.insert(event, at: 0)
+        }
+        historyStore.save(history)
+        reloadQuarantine()
     }
 
     /// Move a misplaced (e.g. Finder-mounted) volume to its canonical path,

@@ -115,3 +115,61 @@ final class QuarantineTests: XCTestCase {
         XCTAssertEqual(back.actions.first?.quarantineID, "id")
     }
 }
+
+/// The hold window: long enough to undo a false positive, short enough that an
+/// infected original is not left lying around inside the vault.
+final class QuarantineExpiryTests: XCTestCase {
+    private func item(ageSeconds: TimeInterval) -> QuarantineItem {
+        QuarantineItem(id: "id-\(ageSeconds)", orgName: "acme", originalPath: "app/x.mjs",
+                       indicator: "loader", evidence: "rmcej%otb%",
+                       date: Date().addingTimeInterval(-ageSeconds), kind: .cleaned,
+                       sha256: String(repeating: "a", count: 64), bytes: 10)
+    }
+
+    func testOnlyItemsPastTheHoldTimeExpire() {
+        let items = [item(ageSeconds: 0), item(ageSeconds: 599), item(ageSeconds: 601), item(ageSeconds: 4000)]
+        let due = QuarantineService.expired(items, now: Date(), ttl: AppStore.quarantineTTL)
+        XCTAssertEqual(due.count, 2)
+        XCTAssertTrue(due.allSatisfy { Date().timeIntervalSince($0.date) >= 600 })
+    }
+
+    func testTheBoundaryItselfExpires() {
+        XCTAssertEqual(QuarantineService.expired([item(ageSeconds: 600)], now: Date(), ttl: 600).count, 1)
+    }
+
+    func testAFreshItemIsHeld() {
+        XCTAssertTrue(QuarantineService.expired([item(ageSeconds: 1)], now: Date(), ttl: 600).isEmpty)
+    }
+
+    /// Purging must take the held bytes and the record with it.
+    func testPurgeRemovesEverythingForThatItem() throws {
+        let root = NSTemporaryDirectory() + "vaultkit-purge-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: root + "/app/.git", withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try "@echo off\n".write(toFile: root + "/app/temp_auto_push.bat", atomically: true, encoding: .utf8)
+
+        let org = Organization(name: "acme", displayName: "Acme", gitAuthorName: "A", gitEmail: "a@x",
+                               forge: .custom, forgeHost: "", forgeSSHPort: nil, folderPath: root,
+                               keyLabel: "ssh-acme", signingEnabled: true, vault: .mounted)
+        let q = QuarantineService()
+        let f = await0(org)
+        let (_, held) = try q.remediate(f, vaultRoot: root)
+        let item = try XCTUnwrap(held)
+        XCTAssertEqual(q.items(in: root).count, 1)
+
+        let event = try q.purge(item, vaultRoot: root, detail: "Purged automatically 10 minutes after quarantine.")
+        XCTAssertEqual(event.kind, .purged)
+        XCTAssertTrue(event.detail.contains("automatically"))
+        XCTAssertTrue(q.items(in: root).isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: "\(root)/.vaultkit/quarantine/\(item.id)"))
+    }
+
+    /// XCTest cannot await in a sync test; hop through a semaphore.
+    private func await0(_ org: Organization) -> ScanFinding {
+        var out: ScanFinding!
+        let done = DispatchSemaphore(value: 0)
+        Task { out = await ScannerService().scan(orgs: [org]).1.first!; done.signal() }
+        done.wait()
+        return out
+    }
+}

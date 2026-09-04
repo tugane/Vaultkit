@@ -216,11 +216,19 @@ struct QuarantineService {
     }
 
     /// Discard the held bytes for good.
-    func purge(_ item: QuarantineItem, vaultRoot: String) throws -> ActionEvent {
+    func purge(_ item: QuarantineItem, vaultRoot: String,
+               detail: String? = nil) throws -> ActionEvent {
         try fm.removeItem(atPath: "\(vaultRoot)/\(Self.folder)/\(item.id)")
         return ActionEvent(date: Date(), kind: .purged, orgName: item.orgName, path: item.originalPath,
-                           indicator: item.indicator, detail: "Purged quarantine \(item.id).",
+                           indicator: item.indicator,
+                           detail: detail ?? "Purged quarantine \(item.id).",
                            quarantineID: item.id)
+    }
+
+    /// Items past their hold time. Pure, so the expiry rule is testable
+    /// without waiting for it.
+    static func expired(_ items: [QuarantineItem], now: Date, ttl: TimeInterval) -> [QuarantineItem] {
+        items.filter { now.timeIntervalSince($0.date) >= ttl }
     }
 
     // MARK: helpers

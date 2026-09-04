@@ -118,7 +118,7 @@ struct ScannerView: View {
 
     @ViewBuilder
     private var quarantineList: some View {
-        Text("Quarantine lives inside each vault at .vaultkit/quarantine, so held bytes stay encrypted at rest and never leave the organization. Restoring puts the original back exactly as it was; with auto-quarantine on, the next pass will take an infected file again.")
+        Text("Quarantine lives inside each vault at .vaultkit/quarantine, so held bytes stay encrypted at rest and never leave the organization. Originals are purged automatically \(plural(Int(AppStore.quarantineTTL / 60), "minute")) after they are set aside — restore inside that window is the only way to get a file back. A locked vault's quarantine is untouched until it is mounted again.")
             .font(.system(size: 12.5))
             .foregroundStyle(p.label2)
             .lineSpacing(3)
@@ -345,6 +345,14 @@ struct QuarantineRow: View {
     let restore: () -> Void
     let purge: () -> Void
 
+    /// How long is left to restore this. Recomputed on every store refresh.
+    private var expiry: String {
+        let left = Int(AppStore.quarantineTTL - Date().timeIntervalSince(item.date))
+        if left <= 0 { return "purging now" }
+        if left < 60 { return "purges in \(left)s — restore now or it is gone" }
+        return "purges in \(plural(left / 60 + 1, "minute"))"
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             Image(systemName: item.kind == .cleaned ? "scissors" : "archivebox.fill")
@@ -365,6 +373,9 @@ struct QuarantineRow: View {
                                 item.sha256.isEmpty ? nil : "sha256 \(item.sha256.prefix(12))"))
                     .font(.system(size: 12))
                     .foregroundStyle(p.label3)
+                Text(expiry)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(p.amberText)
             }
             Spacer(minLength: 12)
             HStack(spacing: 12) {
