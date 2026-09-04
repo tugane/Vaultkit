@@ -219,6 +219,14 @@ sandboxed-hostile territory (it must touch `~/.ssh` and run `diskutil`), so it
 ships **unsandboxed but hardened-runtime, signed and notarized** — and open
 source, because its audience will (rightly) read the code before trusting it.
 
+That also rules out the Mac App Store, permanently. The store mandates the App
+Sandbox, and a sandboxed process's children inherit it: `diskutil` could not
+create, mount or lock a volume, `sc_auth` could not mint an enclave identity,
+and `~/.ssh` and `~/.gitconfig` would sit outside the app's container.
+Privileged helpers are banned there too, so there is no escape hatch — every
+privileged thing this app does is precisely what the sandbox exists to
+prevent. Distribution is direct, by notarized DMG.
+
 ## Failure modes the design must absorb
 
 1. **Cancelled system prompts** at any step → fail closed, state machine returns to the last safe state (I4).
