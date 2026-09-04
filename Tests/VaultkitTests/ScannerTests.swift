@@ -141,11 +141,23 @@ final class ScannerTests: XCTestCase {
         XCTAssertEqual(hitsAgain.count, 1)
     }
 
-    func testDeepScanWidensToSourceFiles() async throws {
-        try write("app/src/lib/helper.ts", "// TXfxHUet9pJVU1BgVkBAbrES4YUc1nGzcG")
+    /// Ordinary source is read on every pass. The behavioural rules exist for
+    /// injections that land in normal files, so a quick pass that skipped them
+    /// would miss that whole class.
+    func testOrdinarySourceIsReadOnAQuickPass() async throws {
+        try write("app/src/lib/helper.ts", "// " + "TXfxHUet9pJVU1BgVkBAbrES4YUc1nGzcG")
+        let (_, quick) = await ScannerService().scan(orgs: [mountedOrg])
+        XCTAssertEqual(quick.count, 1)
+        XCTAssertEqual(quick.first?.path, "app/src/lib/helper.ts")
+    }
+
+    /// A deep pass widens beyond the JS family, to the config and shell files
+    /// a quick pass leaves alone.
+    func testDeepScanWidensBeyondTheJSFamily() async throws {
+        try write("app/deploy/run.sh", "# " + "TXfxHUet9pJVU1BgVkBAbrES4YUc1nGzcG")
         let scanner = ScannerService()
         let (_, quick) = await scanner.scan(orgs: [mountedOrg])
-        XCTAssertTrue(quick.isEmpty, "a quick pass stays on the targeted file names")
+        XCTAssertTrue(quick.isEmpty, "a shell script is not read on a quick pass")
         let (_, deep) = await scanner.scan(orgs: [mountedOrg], deep: true)
         XCTAssertEqual(deep.count, 1)
     }

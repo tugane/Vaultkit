@@ -40,6 +40,16 @@ that followed. It packages a day of expert setup into a few minutes.
   legitimate config, artifacts and malicious packages are moved into a quarantine
   inside the vault. Restore, purge, a full history, and a notification when it acts.
   Turn auto-quarantine off and it only reports.
+- **Behavioural detection, not just signatures.** A loader spliced into an import
+  block carries none of the campaign's fixed strings, and the 2026 npm compromises
+  split their decode calls in half purely to beat grep. So the Scanner also looks for
+  the shape: decode, fetch, run, co-occurring close together. Install scripts and
+  `binding.gyp` actions are read too, because both execute before anyone reads the code.
+  Heuristic findings are never auto-actioned.
+- **A view of what runs in the background.** Processes given their code on the command
+  line, downloads piped into a shell, and every third-party item that starts itself at
+  login. This family persists as a detached `node -e` plus a LaunchAgent, and neither
+  shows up in a file scan.
 - **Offboarding that is reversible by default.** Removing an organization takes out its
   git routing and nothing else; destroying the vault or the enclave key is a separate,
   typed-confirmation choice, and you get a receipt of what was done and what is still

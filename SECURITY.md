@@ -62,6 +62,13 @@ defence; if you approve prompts you did not initiate, the guarantees fall.
 signatures, protected branches and enforced 2FA are complementary, and Vaultkit
 cannot apply them for you.
 
+**Its heuristics can be wrong, and are built so that being wrong is cheap.** Alongside
+the published indicator set the Scanner reads for behaviour: decoding, fetching and
+executing close together, install scripts that run code, `binding.gyp` actions. That is
+a guess, so it is never auto-actioned. Behavioural findings cannot be auto-quarantined
+and cannot be reached by the purge; they are reported for a human to judge. Minified
+files are downgraded, and an encoded blob counts only next to code that runs it.
+
 **It does not detect malware in general.** The Doctor inspects configuration state. The
 Scanner matches a specific, published indicator set in mounted vaults: the PolinRider
 campaign's loaders, artifacts, packages and infrastructure. It shows that set's date.

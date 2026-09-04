@@ -26,6 +26,9 @@ final class AppStore: ObservableObject {
     @Published var receipt: RemovalReceipt?
     @Published var history = ScannerHistory()
     @Published var quarantine: [QuarantineItem] = []
+    @Published var activity: [ActivityItem] = []
+    @Published var activityRunning = false
+    @Published var activityCheckedAt: Date?
     /// Act on critical hits the moment they are found. Warnings are never
     /// auto-actioned; a fix for those is a button.
     @Published var autoQuarantine = UserDefaults.standard.object(forKey: "vk.scanner.autoQuarantine") as? Bool ?? true {
@@ -42,6 +45,7 @@ final class AppStore: ObservableObject {
     let vaults = DiskUtilVaultService()
     let scanner = ScannerService()
     let quarantineService = QuarantineService()
+    let activityService = ActivityService()
     let historyStore = HistoryStore()
     let doctor = DoctorService()
     let git = GitService()
@@ -76,8 +80,12 @@ final class AppStore: ObservableObject {
         // Mount/eject transitions (caught in refresh) trigger a pass as well, so
         // a freshly mounted vault never waits out the interval unwatched.
         Task { await runScan() }
+        Task { await refreshActivity() }
         Timer.scheduledTimer(withTimeInterval: Self.scanInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.runScan() }
+            Task { @MainActor in
+                await self?.runScan()
+                await self?.refreshActivity()
+            }
         }
     }
 
@@ -103,6 +111,20 @@ final class AppStore: ObservableObject {
     }
 
     var compromiseIndicators: Int { scanFindings.filter { $0.severity == .critical }.count }
+
+    /// Background items that stood out. Mounted vault paths go in so a process
+    /// running out of a vault can be named as such.
+    var flaggedActivity: Int { activity.filter { !$0.reasons.isEmpty }.count }
+
+    func refreshActivity() async {
+        guard !activityRunning else { return }
+        activityRunning = true
+        let paths = organizations.filter { $0.vault == .mounted }
+            .map { ($0.folderPath as NSString).expandingTildeInPath }
+        activity = await activityService.snapshot(vaultPaths: paths)
+        activityCheckedAt = Date()
+        activityRunning = false
+    }
 
     /// One pass, then: with auto-quarantine on: act on every critical hit
     /// and re-read what was touched, so the list shows the state *after* the
@@ -499,6 +521,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
     case vaults = "Vaults"
     case doctor = "Doctor"
     case scanner = "Scanner"
+    case activity = "Activity"
 
     var id: String { rawValue }
 
@@ -509,6 +532,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .vaults: "lock.square.stack"
         case .doctor: "stethoscope"
         case .scanner: "magnifyingglass"
+        case .activity: "waveform.path.ecg.rectangle"
         }
     }
 
@@ -520,6 +544,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .vaults: "lock.square.stack.fill"
         case .doctor: "waveform.path.ecg"
         case .scanner: "magnifyingglass.circle.fill"
+        case .activity: "waveform"
         }
     }
 }
@@ -542,6 +567,7 @@ struct ContentView: View {
                 case .vaults: VaultsView()
                 case .doctor: DoctorView()
                 case .scanner: ScannerView()
+                case .activity: ActivityView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -676,6 +702,7 @@ struct SidebarView: View {
                     row(.dashboard, chip: nil)
                     row(.doctor, chip: store.findings.isEmpty ? nil : "\(store.findings.count)")
                     row(.scanner, chip: store.scanFindings.isEmpty ? nil : "\(store.scanFindings.count)")
+                    row(.activity, chip: store.flaggedActivity == 0 ? nil : "\(store.flaggedActivity)")
 
                     sectionHead("Manage")
                     row(.organizations, chip: "\(store.organizations.count)")

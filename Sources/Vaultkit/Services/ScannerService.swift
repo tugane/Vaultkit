@@ -239,7 +239,7 @@ actor ScannerService {
         return result
     }
 
-    private enum FileKind { case config, source, packageJSON, tasksJSON, gitignore, batch, font }
+    private enum FileKind { case config, source, packageJSON, tasksJSON, gitignore, batch, font, bindingGyp }
 
     private static func classify(name: String, path: String, deep: Bool) -> FileKind? {
         let lower = name.lowercased()
@@ -248,8 +248,15 @@ actor ScannerService {
         if lower == "tasks.json", path.hasSuffix("/.vscode/tasks.json") { return .tasksJSON }
         if lower.hasSuffix(".bat") { return .batch }
         if lower.hasSuffix(".woff") || lower.hasSuffix(".woff2") { return .font }
+        if name == "binding.gyp" { return .bindingGyp }
         if PolinRiderIndicators.isTargetConfig(name) { return .config }
-        if deep, PolinRiderIndicators.isDeepTarget(name) { return .source }
+        // Ordinary source is read on every pass, not only a deep one: the
+        // behavioural rules exist for injections that land in normal files,
+        // and a quick pass that skipped them would miss the whole class.
+        if PolinRiderIndicators.isDeepTarget(name) { return .source }
+        if deep, ["json", "yml", "yaml", "sh", "bash", "zsh"].contains((name as NSString).pathExtension.lowercased()) {
+            return .source
+        }
         return nil
     }
 
@@ -318,9 +325,17 @@ actor ScannerService {
 
         case .packageJSON:
             guard let data = read(url, size: size) else { return [] }
-            return maliciousDependencies(in: data).map {
+            var out = maliciousDependencies(in: data).map {
                 finding("Malicious npm dependency", .critical, $0, Remedy.dependency, fix: .dropDependency($0))
             }
+            out += Behaviour.lifecycleHits(inPackageJSON: data).map {
+                finding($0.indicator, $0.severity, $0.evidence, $0.remediation)
+            }
+            return out
+
+        case .bindingGyp:
+            guard let data = read(url, size: size), let hit = Behaviour.bindingGypHit(data) else { return [] }
+            return [finding(hit.indicator, hit.severity, hit.evidence, hit.remediation)]
 
         case .tasksJSON:
             guard let data = read(url, size: size) else { return [] }
@@ -356,6 +371,16 @@ actor ScannerService {
             var out: [ScanFinding] = []
             out += payloadHits(in: data).map { finding($0.name, .critical, $0.text, Remedy.payload, fix: .clean) }
             out += c2Hits(in: data).map { finding($0.name, .critical, $0.text, Remedy.payload, fix: .clean) }
+            // Only look at shape once the known signatures have had their say:
+            // a file already matched by an indicator does not need a guess on
+            // top of it, and the fix for that one is precise.
+            if out.isEmpty, let text = String(data: data, encoding: .utf8),
+               let hit = Behaviour.analyse(text: text) {
+                // Behavioural findings are never auto-actioned. They stay
+                // `.manual` so a heuristic can cost a second look and never a
+                // source file.
+                out.append(finding(hit.indicator, hit.severity, hit.evidence, hit.remediation))
+            }
             return out
         }
     }
@@ -439,6 +464,13 @@ enum Remedy {
     static let dependency = "Remove the package, delete node_modules and the lockfile entry, and treat any machine that ever installed it as compromised."
     static let tasks = "Delete the task. With runOn: folderOpen it runs the moment an editor opens this folder. Do not open it in VS Code until it is gone."
     static let font = "A file named like a font that is not one. The campaign hides loaders in .woff2 files; remove it and find what imports it."
+
+    static let remoteExec = "Read the lines named above before anything else. Code that fetches and runs whatever comes back is the shape of every loader in this family, and it is worth checking even when it turns out to be yours. If it is not yours: do not run the project, check git log and git blame for the commit that introduced it, and rotate every credential that was in the environment while it could have run."
+    static let envDecode = "An environment variable being decoded is how a loader hides its address in plain sight, since a key name draws no attention. Confirm the variable is what it claims to be and that the decoded value is not a URL."
+    static let detached = "A detached child outlives the process that started it and keeps no terminal. Combined with network access that is how these campaigns persist. Check what the child runs, and look for a matching LaunchAgent under Activity."
+    static let obfuscated = "An identifier assembled from fragments defeats a search for its name, which is the only reason to write one. Minifiers do this too, so check whether the file is build output before reading further."
+    static let lifecycle = "This runs on npm install, before anyone reads the code. Do not install this package until you have read the script. If it already ran, treat the machine as exposed and rotate whatever was reachable."
+    static let bindingGyp = "node-gyp executes binding.gyp actions during install, with no preinstall or postinstall line to notice. The 2026 worm used exactly this. Read the actions before installing."
 }
 
 extension Data {

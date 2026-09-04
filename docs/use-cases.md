@@ -207,6 +207,58 @@ Every pass and every action is written to the History (a file in Application Sup
 holding paths and indicator names, never contents), and a system notification says
 what was found and what was done.
 
+## UC13: Catch a loader that has no signature
+
+**Persona:** all · **Goal:** an injection that matches no known indicator is still
+caught, without the guess being able to destroy a file.
+
+Signature matching has a floor. A loader spliced into an import block carries none of
+PolinRider's fixed strings, and the 2026 npm compromises split their decode calls
+across two halves specifically to defeat a grep. What none of them can hide is the
+shape, so the Scanner also reads for behaviour: something decoded, something fetched,
+something run, co-occurring inside a twenty line window. A fetch and an `eval` forty
+lines apart are not related and are not reported.
+
+It also reads what executes before a human does: `preinstall` and `postinstall`
+scripts, and `binding.gyp` actions, which node-gyp runs at install time with no
+lifecycle line to notice.
+
+Three rules keep the false positive rate survivable, each of them written after the
+rule fired on something innocent:
+
+- **Minified files are downgraded.** Bundles legitimately contain every one of these
+  signals, so a build artefact is reported as a warning and never as a compromise.
+- **A long base64 run is not evidence.** The first thing this rule found in the wild
+  was a 22KB PNG noise texture inlined as a data URI. An encoded blob only counts next
+  to code that decodes or runs it.
+- **Behavioural findings are never auto-actioned.** They carry `.manual`, so
+  auto-quarantine cannot touch them and the ten minute purge can never reach them. A
+  guess costs a second look, never a source file.
+
+## UC14: See what is running in the background
+
+**Persona:** all · **Goal:** answer the question a file scan cannot, which is what is
+executing right now and what will start again after a reboot.
+
+This family persists by spawning a detached `node -e` with stdio ignored, and the 2026
+macOS campaigns add a LaunchAgent under `~/Library/LaunchAgents`, which needs no
+administrator rights and keeps working after the dropper is deleted. Neither is a file
+in a repository, so neither appears in a scan.
+
+The Activity page lists processes given their code on the command line, anything piping
+a download into a shell, anything listening for inbound connections, and anything whose
+executable sits in a temporary directory or inside a vault. Below that it lists every
+third party item that starts itself: login items, system items and the user crontab.
+Apple's own are omitted, since they live on the signed read only system volume.
+
+Matching is on the executable and on script arguments, never on the whole command line.
+The first live run matched any path mentioned anywhere and so flagged the test runner
+and a shell reading its own snapshot file.
+
+It reports and never kills anything. Terminating a process you have not identified is
+how people break their own machines, and the list gives you the pid to do it
+deliberately.
+
 ## Non-goals
 
 - Not an antivirus, not an EDR: the Doctor checks *configuration*, and the Scanner
