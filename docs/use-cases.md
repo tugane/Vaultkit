@@ -226,8 +226,11 @@ lifecycle line to notice.
 Three rules keep the false positive rate survivable, each of them written after the
 rule fired on something innocent:
 
-- **Minified files are downgraded.** Bundles legitimately contain every one of these
-  signals, so a build artefact is reported as a warning and never as a compromise.
+- **Minified files are not analysed at all.** Every rule asks whether two signals sit
+  within twenty lines of each other, and jQuery 3.7.1 is a single line of 87KB: every
+  signal lands on line 1, every distance is zero, and the test degenerates into "does
+  this file contain a fetch and an eval anywhere", which is true of every substantial
+  library ever shipped. Signature matching is byte exact and still covers those files.
 - **A long base64 run is not evidence.** The first thing this rule found in the wild
   was a 22KB PNG noise texture inlined as a data URI. An encoded blob only counts next
   to code that decodes or runs it.

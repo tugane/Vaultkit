@@ -114,15 +114,22 @@ enum Behaviour {
         let (found, minified) = signals(in: text)
         guard !found.isEmpty else { return nil }
 
+        // Minification erases the structure this whole file depends on. Every
+        // rule below asks whether two signals sit within `window` lines of each
+        // other, and jQuery 3.7.1 is a single line of 87KB: every signal lands
+        // on line 1, every distance is zero, and the proximity test degenerates
+        // into "does this file contain a fetch and an eval anywhere", which is
+        // true of every substantial JavaScript library ever shipped. Reporting
+        // it as a downgraded warning was papering over a rule that cannot run
+        // on this input. Signature matching is byte exact and unaffected, so a
+        // known-malicious bundle is still caught; it is only the behavioural
+        // guess that has nothing to work with.
+        guard !minified else { return nil }
+
         func hit(_ indicator: String, _ severity: DoctorFinding.Severity,
                  _ evidence: String, _ remediation: String) -> Hit {
-            Hit(indicator: minified ? "\(indicator) (in a minified file)" : indicator,
-                // A bundle is not evidence of anything on its own.
-                severity: minified ? .warning : severity,
-                evidence: evidence,
-                remediation: minified
-                    ? "This file looks like build output, where these patterns are common and usually harmless. Check whether it is committed on purpose, and rebuild it from source you trust rather than editing it."
-                    : remediation)
+            Hit(indicator: indicator, severity: severity,
+                evidence: evidence, remediation: remediation)
         }
 
         if let (e, n) = near(found[.execute], found[.network]) {

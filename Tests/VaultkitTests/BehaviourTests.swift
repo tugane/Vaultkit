@@ -71,14 +71,23 @@ final class BehaviourTests: XCTestCase {
         XCTAssertNil(Behaviour.analyse(text: lines.joined(separator: "\n")))
     }
 
-    /// Bundles legitimately contain all of these, so they are reported but
-    /// never as critical: build output is not evidence of anything.
-    func testMinifiedBundleIsDowngraded() {
+    /// Minification erases the line structure every rule here depends on, so
+    /// the proximity test degenerates to "contains a fetch and an eval", which
+    /// is true of every real library. jQuery 3.7.1 is one line of 87KB and was
+    /// flagged on a real project before this guard existed.
+    func testMinifiedFileIsNotAnalysed() {
         let bundle = "!function(){" + String(repeating: "var a=1;", count: 200)
             + "\(runCall)(\(decodeCall)(x));fetch(y)}();"
-        let hit = Behaviour.analyse(text: bundle)
-        XCTAssertEqual(hit?.severity, .warning)
-        XCTAssertEqual(hit?.indicator.contains("minified"), true)
+        XCTAssertNil(Behaviour.analyse(text: bundle))
+    }
+
+    /// The shape of the real false positive: one enormous line carrying both
+    /// signals, which the window can only ever call adjacent.
+    func testSingleLineLibraryIsNotFlagged() {
+        let library = "/*! jQuery v3.7.1 */!function(e,t){" + String(repeating: "n.fn=n.prototype;", count: 400)
+            + "fetch(u).then(r=>r.text()).then(s=>\(runCall)(s))}();"
+        XCTAssertEqual(library.split(separator: "\n").count, 1, "one line, like the real thing")
+        XCTAssertNil(Behaviour.analyse(text: library))
     }
 
     func testEnvironmentVariableDecodeIsAWarningOnItsOwn() {

@@ -67,7 +67,9 @@ the published indicator set the Scanner reads for behaviour: decoding, fetching 
 executing close together, install scripts that run code, `binding.gyp` actions. That is
 a guess, so it is never auto-actioned. Behavioural findings cannot be auto-quarantined
 and cannot be reached by the purge; they are reported for a human to judge. Minified
-files are downgraded, and an encoded blob counts only next to code that runs it.
+files are not analysed behaviourally at all, since minification erases the line
+structure the rules depend on, and an encoded blob counts only next to code that runs
+it.
 
 **It does not detect malware in general.** The Doctor inspects configuration state. The
 Scanner matches a specific, published indicator set in mounted vaults: the PolinRider
