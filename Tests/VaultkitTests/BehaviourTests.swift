@@ -108,6 +108,30 @@ final class BehaviourTests: XCTestCase {
         XCTAssertEqual(Behaviour.analyse(text: text)?.severity, .critical)
     }
 
+    /// The real false positive: an HMAC config naming which encodings it
+    /// accepts. Nothing is decoded, and the word sits in a type annotation.
+    func testEncodingNamedInATypeAnnotationIsNotADecode() {
+        let config = """
+        export default registerAs('inboundSecurity', () => ({
+          algorithm: process.env.INBOUND_HMAC_ALGORITHM || 'sha256',
+          encoding: (process.env.INBOUND_HMAC_ENCODING || 'hex') as 'hex' | 'base64',
+        }));
+        """
+        XCTAssertNil(Behaviour.analyse(text: config))
+    }
+
+    /// Encoding is not decoding, though both name the same word.
+    func testWritingBase64IsNotADecode() {
+        let text = "const sig = h.digest().toString('base64');\nconst k = process.env.KEY;"
+        XCTAssertNil(Behaviour.analyse(text: text))
+    }
+
+    /// The call shape still counts, under any of its spellings.
+    func testBufferFromBase64IsStillADecode() {
+        let text = "const k = Buffer.from(process.env.SEED, 'base64');\nexport default k;"
+        XCTAssertEqual(Behaviour.analyse(text: text)?.severity, .warning)
+    }
+
     func testCleanSourceProducesNothing() {
         let ok = """
         import { useState } from 'react';

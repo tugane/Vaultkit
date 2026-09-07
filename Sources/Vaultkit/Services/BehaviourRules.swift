@@ -38,7 +38,7 @@ enum Behaviour {
     /// Substring triggers per signal. Lower-cased comparison, so a rename to
     /// `Eval` or `ATOB` still lands.
     static let triggers: [Signal: [String]] = [
-        .decode: ["atob(", "from(atob", "'base64'", "\"base64\"", "fromcharcode(", "unescape("],
+        .decode: ["atob(", "from(atob", "fromcharcode(", "unescape("],
         .network: ["node-fetch", "axios", "https.get", "https.request", "http.get",
                    "fetch(", "xmlhttprequest", "undici", "got(", "request(", "curl "],
         .execute: ["eval(", "new function(", "runinthiscontext", "runinnewcontext",
@@ -64,6 +64,19 @@ enum Behaviour {
         return false
     }
 
+    /// Decoding base64 is a call, not a word. `Buffer.from(x, 'base64')` decodes,
+    /// `buf.toString('base64')` encodes, and `as 'hex' | 'base64'` is a type
+    /// annotation that decodes nothing. Matching the bare quoted word could not
+    /// tell them apart and flagged an HMAC config for naming its permitted
+    /// encodings, so the shape of the call is what counts.
+    static func decodesBase64(_ line: String) -> Bool {
+        let l = line.lowercased()
+        if l.range(of: #"buffer\.from\s*\([^)]*['"]base64['"]"#, options: .regularExpression) != nil { return true }
+        if l.range(of: #"(base64decode|decodebase64|frombase64|base64\.decode)"#,
+                   options: .regularExpression) != nil { return true }
+        return false
+    }
+
     /// A long base64 run. Deliberately NOT treated as obfuscation on its own:
     /// embedded assets are everywhere, and the first thing this rule found in
     /// the wild was a 22KB PNG noise texture inlined as a data URI. It only
@@ -83,6 +96,9 @@ enum Behaviour {
             let line = raw.lowercased()
             for (signal, needles) in triggers where needles.contains(where: line.contains) {
                 found[signal, default: []].append(i)
+            }
+            if decodesBase64(line) {
+                found[.decode, default: []].append(i)
             }
             if looksObfuscated(String(raw)) {
                 found[.obfuscation, default: []].append(i)
