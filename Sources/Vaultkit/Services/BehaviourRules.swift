@@ -33,6 +33,10 @@ enum Behaviour {
         let severity: DoctorFinding.Severity
         let evidence: String
         let remediation: String
+        /// 1-based line the finding fired on, so the UI can send you straight
+        /// there. Reading it back out of the evidence string would be parsing
+        /// display text, which is not a data source.
+        var line: Int?
     }
 
     /// Substring triggers per signal. Lower-cased comparison, so a rename to
@@ -143,44 +147,44 @@ enum Behaviour {
         guard !minified else { return nil }
 
         func hit(_ indicator: String, _ severity: DoctorFinding.Severity,
-                 _ evidence: String, _ remediation: String) -> Hit {
-            Hit(indicator: indicator, severity: severity,
-                evidence: evidence, remediation: remediation)
+                 _ evidence: String, _ remediation: String, _ at: Int? = nil) -> Hit {
+            Hit(indicator: indicator, severity: severity, evidence: evidence,
+                remediation: remediation, line: at.map { $0 + 1 })
         }
 
         if let (e, n) = near(found[.execute], found[.network]) {
             return hit("Fetches and runs remote code", .critical,
                        "\(Signal.network.rawValue) at \(line(n)), \(Signal.execute.rawValue) at \(line(e))",
-                       Remedy.remoteExec)
+                       Remedy.remoteExec, min(e, n))
         }
         if let (e, d) = near(found[.execute], found[.decode]) {
             return hit("Runs decoded code", .critical,
                        "\(Signal.decode.rawValue) at \(line(d)), \(Signal.execute.rawValue) at \(line(e))",
-                       Remedy.remoteExec)
+                       Remedy.remoteExec, min(e, d))
         }
         if let (e, o) = near(found[.execute], found[.obfuscation]) {
             return hit("Runs code built from hidden identifiers", .critical,
                        "\(Signal.obfuscation.rawValue) at \(line(o)), \(Signal.execute.rawValue) at \(line(e))",
-                       Remedy.remoteExec)
+                       Remedy.remoteExec, min(e, o))
         }
         if let (e, b) = near(found[.execute], found[.encodedBlob]) {
             return hit("Runs an encoded blob", .critical,
                        "\(Signal.encodedBlob.rawValue) at \(line(b)), \(Signal.execute.rawValue) at \(line(e))",
-                       Remedy.remoteExec)
+                       Remedy.remoteExec, min(e, b))
         }
         if let (d, env) = near(found[.decode], found[.envSource]) {
             return hit("Decodes an environment variable", .warning,
                        "\(Signal.envSource.rawValue) at \(line(env)), \(Signal.decode.rawValue) at \(line(d))",
-                       Remedy.envDecode)
+                       Remedy.envDecode, min(d, env))
         }
         if let (n, det) = near(found[.network], found[.detach]) {
             return hit("Detaches a process that talks to the network", .warning,
                        "\(Signal.network.rawValue) at \(line(n)), \(Signal.detach.rawValue) at \(line(det))",
-                       Remedy.detached)
+                       Remedy.detached, min(n, det))
         }
         if let o = found[.obfuscation]?.first {
             return hit("Identifier hidden from search", .warning,
-                       "\(Signal.obfuscation.rawValue) at \(line(o))", Remedy.obfuscated)
+                       "\(Signal.obfuscation.rawValue) at \(line(o))", Remedy.obfuscated, o)
         }
         return nil
     }

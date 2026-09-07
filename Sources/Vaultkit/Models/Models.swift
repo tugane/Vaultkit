@@ -85,11 +85,21 @@ struct ScanFinding: Identifiable, Hashable {
     var repo: String                 // nearest enclosing git repository
     var path: String                 // relative to the org folder
     var absolutePath: String
+    /// 1-based line, when the rule that fired knows one. Lets the row hand you
+    /// path:line instead of just a folder to go hunting in.
+    var line: Int?
     var indicator: String            // "PolinRider loader: original variant"
     var severity: DoctorFinding.Severity
     var evidence: String             // the marker matched: never payload bytes
     var remediation: String
     var fix: Fix = .manual
+
+    /// What you paste into a terminal or an editor to land on the finding.
+    /// A folder to go hunting in is not a location.
+    var locator: String { line.map { "\(absolutePath):\($0)" } ?? absolutePath }
+    /// Same idea, shortened for display: the tail survives middle truncation,
+    /// so the line number stays readable however narrow the window gets.
+    var displayPath: String { line.map { "\(path):\($0)" } ?? path }
 }
 
 /// One pass of the Scanner, as kept in the history.

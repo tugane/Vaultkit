@@ -298,6 +298,8 @@ struct ScanFindingRow: View {
         }
     }
 
+    @State private var copied = false
+
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             Image(systemName: symbol)
@@ -306,12 +308,13 @@ struct ScanFindingRow: View {
                 .frame(width: 34, height: 38)
             VStack(alignment: .leading, spacing: 7) {
                 Text(finding.indicator).font(.system(size: 13.5, weight: .medium))
-                Text(finding.path)
+                Text(finding.displayPath)
                     .font(.system(size: 12).monospaced())
                     .foregroundStyle(p.label2)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
+                    .help(finding.locator)
                 Text("matched: \(finding.evidence)")
                     .font(.system(size: 12).monospaced())
                     .foregroundStyle(p.label3)
@@ -323,6 +326,13 @@ struct ScanFindingRow: View {
             }
             Spacer(minLength: 12)
             HStack(spacing: 10) {
+                LinkButton(copied ? "Copied" : "Copy Path", color: p.label2, hoverColor: p.label,
+                           font: .system(size: 12.5, weight: .medium)) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(finding.locator, forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(2)); copied = false }
+                }
                 LinkButton("Reveal", color: p.label2, hoverColor: p.label,
                            font: .system(size: 12.5, weight: .medium)) {
                     NSWorkspace.shared.selectFile(finding.absolutePath, inFileViewerRootedAtPath: "")

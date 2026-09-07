@@ -254,3 +254,31 @@ final class ActivityRuleTests: XCTestCase {
         }
     }
 }
+
+/// A finding you cannot navigate to is a rumour. These lock the locator down.
+final class FindingLocationTests: XCTestCase {
+    func testTheRuleReportsTheLineItFiredOn() {
+        let text = """
+        // header
+        const r = await fetch(url);
+        eval(await r.text());
+        """
+        XCTAssertEqual(Behaviour.analyse(text: text)?.line, 2, "1-based, at the first signal")
+    }
+
+    func testLocatorIsPasteableWithTheLine() {
+        let f = ScanFinding(orgName: "hup", repo: "hup-api", path: "src/a.ts",
+                            absolutePath: "/Users/x/work/hup/hup-api/src/a.ts", line: 41,
+                            indicator: "i", severity: .warning, evidence: "e", remediation: "r")
+        XCTAssertEqual(f.locator, "/Users/x/work/hup/hup-api/src/a.ts:41")
+        XCTAssertEqual(f.displayPath, "src/a.ts:41")
+    }
+
+    func testLocatorFallsBackToThePathWhenThereIsNoLine() {
+        let f = ScanFinding(orgName: "me", repo: "r", path: "p.json",
+                            absolutePath: "/Users/x/p.json", line: nil,
+                            indicator: "i", severity: .warning, evidence: "e", remediation: "r")
+        XCTAssertEqual(f.locator, "/Users/x/p.json")
+        XCTAssertEqual(f.displayPath, "p.json")
+    }
+}

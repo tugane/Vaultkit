@@ -295,8 +295,9 @@ actor ScannerService {
                        repo: String, rel: String) -> [ScanFinding] {
         func finding(_ indicator: String, _ severity: DoctorFinding.Severity,
                      _ evidence: String, _ remediation: String,
-                     fix: ScanFinding.Fix = .manual) -> ScanFinding {
+                     fix: ScanFinding.Fix = .manual, line: Int? = nil) -> ScanFinding {
             ScanFinding(orgName: org.name, repo: repo, path: rel, absolutePath: url.path,
+                        line: line,
                         indicator: indicator, severity: severity, evidence: evidence,
                         remediation: remediation, fix: fix)
         }
@@ -335,7 +336,7 @@ actor ScannerService {
 
         case .bindingGyp:
             guard let data = read(url, size: size), let hit = Behaviour.bindingGypHit(data) else { return [] }
-            return [finding(hit.indicator, hit.severity, hit.evidence, hit.remediation)]
+            return [finding(hit.indicator, hit.severity, hit.evidence, hit.remediation, line: hit.line)]
 
         case .tasksJSON:
             guard let data = read(url, size: size) else { return [] }
@@ -379,7 +380,7 @@ actor ScannerService {
                 // Behavioural findings are never auto-actioned. They stay
                 // `.manual` so a heuristic can cost a second look and never a
                 // source file.
-                out.append(finding(hit.indicator, hit.severity, hit.evidence, hit.remediation))
+                out.append(finding(hit.indicator, hit.severity, hit.evidence, hit.remediation, line: hit.line))
             }
             return out
         }
