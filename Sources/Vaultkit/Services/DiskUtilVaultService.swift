@@ -344,7 +344,9 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
     // still mounted, so "we just locked it" is not evidence enough; check.
 
     /// True when `path` is itself a mount point (not the bare placeholder).
-    func isMountPoint(_ path: String) -> Bool {
+    func isMountPoint(_ path: String) -> Bool { Self.isMountPoint(path) }
+
+    static func isMountPoint(_ path: String) -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: path) else { return false }
         // "/" is its own parent, so the device comparison below can't see it.
@@ -354,6 +356,75 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
               let up = try? fm.attributesOfItem(atPath: parent) else { return false }
         // A different device number than the parent ⇒ a filesystem is mounted here.
         return (here[.systemNumber] as? Int) != (up[.systemNumber] as? Int)
+    }
+
+    // MARK: guard drift
+    //
+    // A guard goes stale whenever a vault is put at rest by something other
+    // than this app: an eject from Finder, work-off, a reboot. The placeholder
+    // comes back at the 700 it was opened to for the mount, writable, so
+    // anything saved there lands on the plain disk and is shadowed at the next
+    // mount. Nothing in the app is running at that moment to close it, so the
+    // store repairs it on its next refresh.
+
+    enum GuardRepair: Equatable {
+        case closed
+        case alreadyClosed
+        /// A live volume sits on the path. chmod follows it and would rewrite
+        /// the volume root, whose mode is stored inside the volume.
+        case skippedMounted
+        /// Plaintext is already trapped there. Closing the guard would hide it
+        /// from the rescue the "Files trapped" finding is asking for.
+        case skippedOccupied
+        /// Changed moments ago: most likely a mount in progress, by this app or
+        /// by work-on, which opens the guard and then waits on a passphrase.
+        case skippedRecent
+        case missing
+    }
+
+    /// How long a guard must have sat unchanged before it counts as drift
+    /// rather than a mount in progress. work-on opens the guard and then
+    /// prompts, so the window is as long as a person takes to type.
+    static let guardGrace: TimeInterval = 120
+
+    /// Finder writes this into any folder it shows. It is not user data, and
+    /// counting it as trapped would leave every guard Finder looked at open.
+    static let finderMetadata: Set<String> = [".DS_Store"]
+
+    /// Close a placeholder guard that has drifted open. Every condition is read
+    /// from the filesystem at the moment of acting, never from the app's cached
+    /// vault state, because that cached state is precisely what may be stale.
+    /// An explicit Fix press passes `grace: 0, requireEmpty: false`; the
+    /// mount-point test is never skippable.
+    static func recloseGuard(at path: String, now: Date = Date(),
+                             grace: TimeInterval = guardGrace,
+                             requireEmpty: Bool = true) -> GuardRepair {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return .missing }
+        guard !isMountPoint(path) else { return .skippedMounted }
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let mode = attrs[.posixPermissions] as? NSNumber else { return .missing }
+        if mode.intValue == 0 { return .alreadyClosed }
+        if requireEmpty {
+            let items = (try? fm.contentsOfDirectory(atPath: path)) ?? []
+            if items.contains(where: { !finderMetadata.contains($0) }) { return .skippedOccupied }
+        }
+        if grace > 0 {
+            // ctime, not mtime: chmod updates it, so a guard opened for a mount
+            // looks recent even though nothing inside it changed.
+            var st = stat()
+            if stat(path, &st) == 0 {
+                let changed = Date(timeIntervalSince1970: TimeInterval(st.st_ctimespec.tv_sec))
+                if now.timeIntervalSince(changed) < grace { return .skippedRecent }
+            }
+        }
+        // Once more, immediately before acting. This narrows the window rather
+        // than closing it (there is no atomic chmod-unless-mounted), and a root
+        // left at 000 by that microsecond race is repaired on the next mount by
+        // repairMountedRoot. It is still the one mistake worth checking twice.
+        guard !isMountPoint(path) else { return .skippedMounted }
+        do { try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path) } catch { return .missing }
+        return .closed
     }
 
     private func openGuard(at path: String) {

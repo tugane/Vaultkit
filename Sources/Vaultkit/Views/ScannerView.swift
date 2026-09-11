@@ -412,6 +412,7 @@ struct ActionRow: View {
         case .restored: "arrow.uturn.backward"
         case .purged: "trash"
         case .manual: "hand.raised.fill"
+        case .guardClosed: "lock.fill"
         }
     }
     private var color: Color {
@@ -420,6 +421,7 @@ struct ActionRow: View {
         case .restored: p.accent
         case .purged: p.label3
         case .manual: p.amber
+        case .guardClosed: p.green
         }
     }
 

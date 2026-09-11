@@ -99,11 +99,14 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
                 contents = try? fm.contentsOfDirectory(atPath: path)
                 try? fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
             }
-            guard let contents, !contents.isEmpty else { return nil }
+            // Finder's .DS_Store is not user data; flagging it as trapped
+            // plaintext was a critical finding for a folder someone looked at.
+            let trapped = (contents ?? []).filter { !DiskUtilVaultService.finderMetadata.contains($0) }
+            guard !trapped.isEmpty else { return nil }
             return DoctorFinding(
                 checkName: "Files trapped under a locked vault",
                 severity: .critical,
-                detail: "\(org.folderPath) contains \(contents.count) item(s) on the plain disk. They are unencrypted, and mounting the vault will hide them (shadowing, not merging): \(contents.prefix(3).joined(separator: ", ")).",
+                detail: "\(org.folderPath) contains \(trapped.count) item(s) on the plain disk. They are unencrypted, and mounting the vault will hide them (shadowing, not merging): \(trapped.prefix(3).joined(separator: ", ")).",
                 remediation: "Move the items into the vault (mounted) or delete them, then re-close the guard.",
                 autoFixable: false
             )
@@ -214,8 +217,13 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
         case "Open guard on locked vault":
             // Scope strictly to the finding's org. A blanket chmod would race
             // a concurrent mount that legitimately opened another org's guard.
+            // This used to chmod on the strength of the cached vault state
+            // alone; if that state was stale and the volume had mounted, the
+            // chmod rewrote the volume root. Now it goes through the same
+            // filesystem checks as the automatic repair. A press is explicit,
+            // so it skips the grace period and the emptiness test.
             if let org = orgs.first(where: { $0.name == finding.orgName }), org.vault == .locked {
-                try? fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: expand(org.folderPath))
+                _ = DiskUtilVaultService.recloseGuard(at: expand(org.folderPath), grace: 0, requireEmpty: false)
             }
         case "Git identity guessing enabled":
             _ = try? await runner.run("/usr/bin/git", ["config", "--global", "user.useConfigOnly", "true"])

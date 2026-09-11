@@ -116,7 +116,12 @@ struct ScanEvent: Identifiable, Codable, Hashable {
 
 /// Something the Scanner did, or could not do: about a finding.
 struct ActionEvent: Identifiable, Codable, Hashable {
-    enum Kind: String, Codable { case cleaned, quarantined, restored, purged, manual }
+    enum Kind: String, Codable {
+        case cleaned, quarantined, restored, purged, manual
+        /// A drifted placeholder guard closed on refresh. Raw value reads as a
+        /// verb in the History row, like the others.
+        case guardClosed = "closed"
+    }
     var id: UUID = UUID()
     var date: Date
     var kind: Kind

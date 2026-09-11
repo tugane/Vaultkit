@@ -272,6 +272,29 @@ final class AppStore: ObservableObject {
         // time is honoured to the second and the countdown in the UI ticks.
         reloadQuarantine()
         sweepQuarantine()
+        closeDriftedGuards()
+    }
+
+    /// Put back any guard left open while its vault is at rest. A Finder eject,
+    /// work-off or a reboot all return the placeholder at the 700 it was opened
+    /// to for the mount, and nothing in the app is running at that moment to
+    /// close it. refresh runs every ten seconds and on every mount notification,
+    /// which is exactly when that happens. Orgs with an action in flight are
+    /// skipped outright: this app's own mount opens the guard on purpose.
+    func closeDriftedGuards(now: Date = Date()) {
+        var closed: [ActionEvent] = []
+        for org in organizations where org.vault == .locked && !busyOrgs.contains(org.name) {
+            let path = (org.folderPath as NSString).expandingTildeInPath
+            guard DiskUtilVaultService.recloseGuard(at: path, now: now) == .closed else { continue }
+            closed.append(ActionEvent(
+                date: now, kind: .guardClosed, orgName: org.name, path: "",
+                indicator: "Open guard on locked vault",
+                detail: "\(org.folderPath) was writable while the vault was at rest. Closed it, so nothing can land on the plain disk and be hidden at the next mount."))
+            findings.removeAll { $0.checkName == "Open guard on locked vault" && $0.orgName == org.name }
+        }
+        guard !closed.isEmpty else { return }
+        history.actions.insert(contentsOf: closed, at: 0)
+        historyStore.save(history)
     }
 
     /// Purge quarantined originals past their hold time. Only reaches mounted
