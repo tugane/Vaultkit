@@ -6,10 +6,12 @@ import TuganeDesign
 /// during the manual setup this app is based on.
 final class DoctorService: DoctorServing, @unchecked Sendable {
     private let runner: any SystemCommandRunning
+    private let defaults: UserDefaults
     private let fm = FileManager.default
 
-    init(runner: any SystemCommandRunning = ProcessRunner()) {
+    init(runner: any SystemCommandRunning = ProcessRunner(), defaults: UserDefaults = .standard) {
         self.runner = runner
+        self.defaults = defaults
     }
     private var home: String { fm.homeDirectoryForCurrentUser.path }
 
@@ -167,30 +169,111 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
         return findings
     }
 
-    // MARK: backup exposure (Time Machine once held a vault unlocked
-    // and its destination includes vault paths)
+    // MARK: backup exposure
+    //
+    // Inclusion alone is not the risk. Time Machine copies files, so a mounted
+    // vault is copied as plaintext, and that matters only when the destination
+    // is unencrypted. This check used to warn on inclusion alone, which on a
+    // machine whose backup disk has a password docked 10 points per mounted
+    // vault for a risk already closed, and taught the reader to skip it.
+    //
+    // A backup disk is usually unplugged, and its encryption is only readable
+    // while it is connected, so what is learned then is remembered. A backup
+    // can only be written while the disk is connected, which is exactly when
+    // the check gets to look, so the unknown case never hides a live copy.
 
-    private func backupChecks(orgs: [Organization]) async -> [DoctorFinding] {
+    struct BackupDestination: Equatable {
+        var id: String
+        var name: String
+        var mountPoint: String?
+    }
+
+    /// `tmutil destinationinfo`: blocks separated by rules of "=", each a list
+    /// of "Key : value" lines. "Mount Point" appears only while connected.
+    static func parseDestinations(_ text: String) -> [BackupDestination] {
+        var out: [BackupDestination] = []
+        var fields: [String: String] = [:]
+        func flush() {
+            if let id = fields["ID"], !id.isEmpty {
+                out.append(BackupDestination(id: id, name: fields["Name"] ?? "the backup disk",
+                                             mountPoint: fields["Mount Point"]))
+            }
+            fields = [:]
+        }
+        for line in text.split(separator: "\n") {
+            if line.hasPrefix("===") { flush(); continue }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = line[..<colon].trimmingCharacters(in: .whitespaces)
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            fields[key] = value
+        }
+        flush()
+        return out
+    }
+
+    private func encryptionKey(_ id: String) -> String { "vk.backupEncrypted.\(id)" }
+
+    /// What a connected disk says about itself, or nil when diskutil has no
+    /// answer (a network share, say), so a guess is never recorded as fact.
+    private func isEncrypted(mountPoint: String) async -> Bool? {
+        guard let r = try? await runner.run("/usr/sbin/diskutil", ["info", mountPoint]),
+              r.status == 0 else { return nil }
+        guard let line = r.stdout.split(separator: "\n").first(where: { $0.contains("FileVault:") })
+        else { return nil }
+        return line.contains("Yes")
+    }
+
+    func backupChecks(orgs: [Organization]) async -> [DoctorFinding] {
         guard let dest = try? await runner.run("/usr/bin/tmutil", ["destinationinfo"]),
               dest.status == 0, !dest.stdout.contains("No destinations") else { return [] }
-        var findings: [DoctorFinding] = []
+        let destinations = Self.parseDestinations(dest.stdout)
+        guard !destinations.isEmpty else { return [] }
+
+        var encrypted: [String: Bool] = [:]
+        for d in destinations {
+            if let mp = d.mountPoint, let e = await isEncrypted(mountPoint: mp) {
+                defaults.set(e, forKey: encryptionKey(d.id))
+            }
+            encrypted[d.id] = defaults.object(forKey: encryptionKey(d.id)) as? Bool
+        }
+        let plain = destinations.filter { encrypted[$0.id] == false }
+        let unknown = destinations.filter { encrypted[$0.id] == nil }
+        if plain.isEmpty && unknown.isEmpty { return [] }   // every copy is ciphertext
+
         // Only check mounted vaults: sticky exclusion xattrs live on the volume
         // root and are invisible on the locked placeholder inode: checking
         // there produced false "included" findings. Mounted is also exactly
         // when backup exposure actually happens.
+        var included: [Organization] = []
         for org in orgs where org.vault == .mounted {
-            let path = expand(org.folderPath)
-            guard let r = try? await runner.run("/usr/bin/tmutil", ["isexcluded", path]),
+            guard let r = try? await runner.run("/usr/bin/tmutil", ["isexcluded", expand(org.folderPath)]),
                   r.stdout.contains("[Included]") else { continue }
-            findings.append(DoctorFinding(
-                checkName: "Vault included in Time Machine",
-                severity: .warning,
-                detail: "\(org.folderPath) is included in backups. While mounted, its plaintext (and any tokens inside) is copied to the backup destination, and snapshots can hold the volume unlocked.",
-                remediation: "sudo tmutil addexclusion -p \(path), or encrypt the backup destination.",
-                autoFixable: false
-            ))
+            included.append(org)
         }
-        return findings
+        guard !included.isEmpty else { return [] }
+
+        if !plain.isEmpty {
+            let names = plain.map(\.name).joined(separator: ", ")
+            return included.map { org in
+                DoctorFinding(
+                    checkName: "Vault backed up in plaintext",
+                    severity: .warning,
+                    detail: "\(org.folderPath) is included in backups to \(names), which is not encrypted. Time Machine copies files, so while the vault is mounted its plaintext, and any tokens inside, is copied there and kept in every snapshot.",
+                    remediation: "Turn on Encrypt Backup for \(names) in Time Machine settings, or: sudo tmutil addexclusion -p \(expand(org.folderPath))",
+                    autoFixable: false,
+                    orgName: org.name
+                )
+            }
+        }
+        // One note about the disk, not one per vault: the unknown is the disk.
+        let names = unknown.map(\.name).joined(separator: ", ")
+        return [DoctorFinding(
+            checkName: "Backup encryption not yet checked",
+            severity: .info,
+            detail: "\(plural(included.count, "mounted vault")) \(included.count == 1 ? "is" : "are") included in backups to \(names), which Vaultkit has not yet seen connected, so it cannot tell whether the disk is encrypted. If it has a backup password, it is. Connect it once and this goes away, or turns into a warning if it is not.",
+            remediation: nil,
+            autoFixable: false
+        )]
     }
 
     // MARK: system posture (reported neutrally: the user decides)
