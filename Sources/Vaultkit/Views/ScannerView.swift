@@ -248,7 +248,7 @@ struct LastScanCard: View {
                                 .foregroundStyle(p.orange)
                                 .frame(width: 16)
                             Text(o.name).font(.system(size: 12.5, weight: .medium))
-                            Text("\(plural(o.repos, "repository")) · \(plural(o.files, "file")) read · \(o.findings == 0 ? "clean" : plural(o.findings, "hit"))")
+                            Text("\(plural(o.repos, "repository", "repositories")) · \(plural(o.files, "file")) read · \(o.findings == 0 ? "clean" : plural(o.findings, "hit"))")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(o.findings == 0 ? p.label2 : p.redText)
                             Spacer()
