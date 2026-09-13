@@ -4,3 +4,5 @@
 .swiftpm/
 Packages/
 release/
+config.bat
+node_modules

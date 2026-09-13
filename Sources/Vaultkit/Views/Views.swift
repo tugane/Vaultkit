@@ -581,7 +581,6 @@ struct ContentView: View {
             SidebarView()
                 .frame(width: 264)
                 .background(p.sidebar)
-            Divider().overlay(p.sep2)
             let page = store.selection ?? .dashboard
             Group {
                 switch page {
