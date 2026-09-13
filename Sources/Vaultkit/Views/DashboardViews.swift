@@ -312,11 +312,11 @@ struct OrgCard: View {
                         case .locked:
                             pill("Mount", .accent) { store.mountTarget = org }
                         case .mounted:
-                            link("Clone") { store.cloneTarget = org }
+                            link("Clone") { store.openClone(preferring: org) }
                             pill("Eject", .accent) { Task { await store.eject(org) } }
                         case .unlocked:
                             link("Mount") { Task { await store.relocate(org) } }
-                            link("Clone") { store.cloneTarget = org }
+                            link("Clone") { store.openClone(preferring: org) }
                             pill("Secure", .accent) { Task { await store.eject(org) } }
                         case .misplaced:
                             pill("Relocate", .destructive) { Task { await store.relocate(org) } }

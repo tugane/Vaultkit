@@ -4,3 +4,7 @@
 .swiftpm/
 Packages/
 release/
+server/node_modules/
+server/.vercel/
+server/.env
+server/.env.local

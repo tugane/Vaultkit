@@ -57,10 +57,27 @@ that followed. It packages a day of expert setup into a few minutes.
 
 ## Status
 
-**Early: version 0.1.** It is used daily by its author and does real work, but it edits
-your git configuration and creates encrypted volumes. Read the code before trusting it
-with an organization you care about. That is also why it is GPL-licensed: you should be
-able to audit a tool like this, and so should anyone you hand a fork to.
+**Early: version 0.2.** It is used daily by its author and does real work, but it edits
+your git configuration and creates encrypted volumes.
+
+Vaultkit was open source through 0.1.0 and is commercial from 0.2.0; the source is no
+longer public. A security tool you cannot read asks for more trust than one you can, so
+the rest of the argument has to carry more weight: every release is signed with a
+Developer ID and notarized by Apple, each one publishes its SHA-256, [SECURITY.md](SECURITY.md)
+states the threat model and the trust boundaries in full, and — the part that matters
+most — Vaultkit stores nothing of its own. It writes standard git config, standard
+`known_hosts` entries and standard APFS volumes. Delete it and your setup keeps working.
+Nothing you build with it is held hostage to it.
+
+## What it costs
+
+Fourteen days with every feature on, no card, no account. After that it is an annual
+subscription covering up to three Macs and every update in the year.
+
+A lapsed licence never stands between you and your own data: mounting, ejecting and
+removing organizations keep working forever, and that is written into clause 6 of the
+[licence](LICENSE), not just this paragraph. What a subscription covers is adding
+organizations, cloning into a vault, the Scanner and the Activity view.
 
 ## Requirements
 
@@ -70,26 +87,30 @@ able to audit a tool like this, and so should anyone you hand a fork to.
 
 ## Install
 
-Download the notarized DMG from [Releases](https://github.com/tugane/Vaultkit/releases),
-or build from source below. Each release publishes the DMG's SHA-256 so you can check
-what you downloaded:
+Download the notarized DMG from <https://vaultkit.app/download>. Every release
+publishes the DMG's SHA-256 so you can check what you downloaded:
 
 ```bash
 shasum -a 256 ~/Downloads/Vaultkit.dmg
 ```
 
-Building it yourself is the higher-assurance option, and the one this project is
-designed around. See [SECURITY.md](SECURITY.md) for what a signature does and does
-not prove.
+See [SECURITY.md](SECURITY.md) for what a signature does and does not prove.
 
 ## Build
 
+For the licence holder of the source. The repository is private.
+
 ```bash
-git clone https://github.com/tugane/Vaultkit.git
+git clone git@github.com:tugane/Vaultkit.git
 cd Vaultkit
 swift build
 swift run
 ```
+
+A development build carries the placeholder signing key, so activation will refuse
+every key until `Licensing.signingPublicKey` is filled in from `server/`'s keygen —
+see [docs/licensing.md](docs/licensing.md). `scripts/release.sh` refuses to build a
+release while the placeholder is there.
 
 To install it as a real app in `/Applications` rather than running it from the
 command line:
@@ -151,18 +172,29 @@ report a vulnerability. The design documents are worth reading too:
 
 - [Use cases](docs/use-cases.md): who it is for, and what each flow guarantees
 - [Data flow](docs/data-flow.md): architecture, privilege inventory, failure modes
+- [Licensing](docs/licensing.md): the trial, the gate, and the activation service
 
 ## Privacy
 
-No telemetry, no analytics, no update check, no account. The only network traffic
-Vaultkit causes is the SSH connection you asked for: a clone, or a verification test
-you triggered.
+No telemetry, no analytics, no update check, no account.
 
-## Contributing
+Vaultkit makes exactly one kind of request of its own: activating a licence key, and
+re-confirming it about once a week. That sends the key, a one-way hash of this Mac's
+hardware UUID, and the computer's name — nothing else, ever. The trial runs fully
+offline. [PRIVACY.md](PRIVACY.md) lists every field and what is kept.
 
-Issues and pull requests are welcome. If you change anything under
-`Sources/Vaultkit/Services/`, include tests: the services are protocol-first precisely
-so the system can be faked. `Tests/VaultkitTests` shows how.
+The only other traffic is the SSH connection you asked for: a clone, or a verification
+test you triggered. Those go straight to your forge.
+
+## Reporting problems
+
+Bug reports are very welcome at tooamiel@gmail.com, and security reports especially:
+[SECURITY.md](SECURITY.md) says how to send one. The repository is private, so there is
+no pull request to open, but a report with a reproduction gets a fix.
+
+If you have a checkout, the services are protocol-first precisely so the system can be
+faked, and anything under `Sources/Vaultkit/Services/` should come with tests.
+`Tests/VaultkitTests` shows how.
 
 ```bash
 swift test
@@ -172,8 +204,13 @@ One known wrinkle: on some toolchains `swift test` exits non-zero after all test
 because the Swift Testing helper fails to load a suite that contains only XCTest cases.
 Check the `Executed N tests` line rather than the exit code.
 
-## License
+## Licence
 
-GPL-3.0-or-later. See [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT).
+Commercial. Copyright (c) 2026 Amiel Tugane Mutarataza, all rights reserved. See
+[LICENSE](LICENSE) for the terms, [COPYRIGHT](COPYRIGHT) for the notice and
+[PRIVACY.md](PRIVACY.md) for what activation sends.
+
+Versions up to 0.1.0 were GPL-3.0-or-later. That grant stands for the copies it was
+given with; it does not cover 0.2.0 or later.
 
 Design language: [TuganeDesign](https://github.com/tugane/TuganeDesign).

@@ -1,15 +1,18 @@
 Vaultkit
-Copyright (C) 2026 Amiel Tugane Mutarataza
+Copyright (c) 2026 Amiel Tugane Mutarataza. All rights reserved.
 
-This program is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License as published by the
-Free Software Foundation, either version 3 of the License, or (at your
-option) any later version.
+Vaultkit is commercial software, licensed and not sold. Your use of it is
+governed by the End User License Agreement in LICENSE. There is a 14-day trial
+with every feature enabled; after that a current subscription is required.
 
-This program is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
-Public License for more details.
+Vaultkit bundles TuganeDesign, copyright (c) 2026 Amiel Tugane Mutarataza,
+licensed as part of Vaultkit under the same agreement.
 
-You should have received a copy of the GNU General Public License along
-with this program. If not, see <https://www.gnu.org/licenses/>.
+Versions up to and including 0.1.0 were published under the GNU General Public
+License version 3 or later. That grant is not revoked for copies already
+received under it. It does not extend to version 0.2.0 or later.
+
+No part of this software may be copied, distributed or modified except as
+LICENSE permits.
+
+Contact: tooamiel@gmail.com
