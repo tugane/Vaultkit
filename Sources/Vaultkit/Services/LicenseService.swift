@@ -33,8 +33,13 @@ struct HTTPTransport: LicenseTransporting {
 protocol LicenseServing: Sendable {
     func state() async -> LicenseState
     func activate(key: String) async throws -> LicenseState
-    func refreshIfDue() async -> LicenseState
+    func refreshIfDue(force: Bool) async -> LicenseState
     func deactivate() async throws -> LicenseState
+}
+
+extension LicenseServing {
+    /// The scheduled check. Only Settings' "Check Now" passes force.
+    func refreshIfDue() async -> LicenseState { await refreshIfDue(force: false) }
 }
 
 // MARK: - The service
@@ -193,10 +198,14 @@ final class LicenseService: LicenseServing, @unchecked Sendable {
     /// Re-confirms with the service when the entitlement says it is due, and
     /// only then. Called at launch and daily; a no-op the rest of the time, so
     /// the app is silent on the network for a week at a stretch.
-    func refreshIfDue() async -> LicenseState {
+    ///
+    /// `force` is the user asking in Settings. Nothing else sets it: an app
+    /// that revalidates whenever it feels like it is an app that stops working
+    /// on a train.
+    func refreshIfDue(force: Bool) async -> LicenseState {
         let current = await state()
         guard case .licensed(let entitlement) = current else { return current }
-        guard monotonicNow() >= entitlement.recheckAfter else { return current }
+        guard force || monotonicNow() >= entitlement.recheckAfter else { return current }
 
         // Offline is not a verdict. The entitlement still has its grace budget,
         // and judge() is what decides when that runs out.

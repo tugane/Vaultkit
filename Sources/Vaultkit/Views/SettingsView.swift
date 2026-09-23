@@ -10,6 +10,9 @@ struct SettingsView: View {
     /// A shorter hold can purge things that are still restorable, and the
     /// purge is permanent. Non-nil → the confirmation is up.
     @State private var pendingHold: TimeInterval?
+    @AppStorage("vk.theme") private var themeRaw = Theme.dark.rawValue
+
+    private var theme: Theme { Theme(rawValue: themeRaw) ?? .dark }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,10 +42,16 @@ struct SettingsView: View {
                     SectionLabel("Scanner").padding(.top, 26).padding(.bottom, 10)
                     quarantineToggle
                     quarantineHold
+                    scanExclusions
 
                     SectionLabel("Notifications").padding(.top, 26).padding(.bottom, 10)
                     notificationChoices
 
+                    SectionLabel("Appearance").padding(.top, 26).padding(.bottom, 10)
+                    appearance
+
+                    SectionLabel("Licence").padding(.top, 26).padding(.bottom, 10)
+                    licence
                 }
                 .padding(.horizontal, 40)
                 .padding(.bottom, 32)
@@ -190,6 +199,101 @@ struct SettingsView: View {
                        detail: "\($0.oldOID.prefix(7)) would have become \($0.newOID.prefix(7))",
                        at: $0.at)
         })
+    }
+
+    // MARK: appearance
+
+    private var appearance: some View {
+        Field("Theme") {
+            Choices(values: [Theme.dark, .light], selected: theme, label: \.toggleLabel) {
+                themeRaw = $0.rawValue
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    // MARK: licence
+
+    @ViewBuilder
+    private var licence: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Field("Status") {
+                Text(store.license.summary)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .padding(.top, 1)
+            }
+
+            // The offline budget is the part that was invisible: a licence can
+            // lapse purely from not reaching the service, and until now the
+            // only warning was it going red.
+            if case .licensed(let entitlement) = store.license {
+                Field("Checked") {
+                    Text(offlineLine(entitlement))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(p.label2)
+                        .padding(.top, 1)
+                }
+                Field("Renews") {
+                    Text(Self.day.string(from: entitlement.periodEnd))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(p.label2)
+                        .padding(.top, 1)
+                }
+                Field("This Mac") {
+                    Text("\(MachineFingerprint.label) · one of \(plural(Licensing.seats, "seat"))")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(p.label2)
+                        .padding(.top, 1)
+                }
+            }
+
+            Field("") {
+                HStack(spacing: 8) {
+                    if store.licenseChecking {
+                        ProgressView().controlSize(.small).frame(height: 26)
+                    } else {
+                        PillButton(title: "Check Now", role: .neutral) {
+                            Task { await store.refreshLicense(force: true) }
+                        }
+                    }
+                    PillButton(title: store.license.isFull ? "Manage Licence" : "Enter a Licence Key",
+                               role: .neutral) { store.showActivation = true }
+                }
+            }
+        }
+    }
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; return f
+    }()
+
+    /// "Verified 3 days ago · works offline for another 18".
+    private func offlineLine(_ e: Entitlement) -> String {
+        let days = max(0, Calendar.current.dateComponents([.day], from: e.issuedAt, to: Date()).day ?? 0)
+        let left = max(0, Licensing.maxOfflineDays - days)
+        let verified = days == 0 ? "Verified today" : "Verified \(plural(days, "day")) ago"
+        return left == 0 ? "\(verified) · offline budget spent"
+                         : "\(verified) · works offline for another \(plural(left, "day"))"
+    }
+
+    // MARK: scanner exclusions
+
+    @ViewBuilder
+    private var scanExclusions: some View {
+        if !store.organizations.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(store.organizations) { org in
+                    Field(org.displayName) {
+                        ExclusionField(paths: org.scanExclusions) { paths in
+                            Task { await store.setScanExclusions(paths, for: org) }
+                        }
+                    }
+                }
+                Note(symbol: "info.circle", tint: p.label3,
+                     text: "Directories the Scanner skips, relative to the vault root, separated by commas \u{2014} press Return to apply. Matched a segment at a time, so vendor skips vendor and everything under it and never vendor-utils. Build output and node_modules are already skipped everywhere. Excluding a directory means nothing in it is watched for indicators, so keep the list short.")
+            }
+            .padding(.top, 10)
+        }
     }
 
     // MARK: notifications
@@ -354,6 +458,26 @@ private struct Choices<Value: Hashable>: View {
 
 /// Comma-separated paths, applied on Return. Deliberately not a live binding:
 /// every commit re-runs a full scan of that vault.
+private struct ExclusionField: View {
+    let paths: [String]
+    let commit: ([String]) -> Void
+    @State private var text = ""
+    @Environment(\.palette) private var p
+
+    var body: some View {
+        TextField("drizzle, vendor", text: $text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12.5))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .card(p.well, radius: 7)
+            .frame(maxWidth: 340)
+            .onSubmit { commit(text.components(separatedBy: ",")) }
+            .onAppear { text = paths.joined(separator: ", ") }
+            .onChange(of: paths) { _, new in text = new.joined(separator: ", ") }
+    }
+}
+
 private struct Note: View {
     let symbol: String
     let tint: Color

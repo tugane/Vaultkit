@@ -49,7 +49,10 @@ struct Organization: Identifiable, Codable, Hashable {
     var keyLabel: String             // Secure Enclave identity label, "ssh-acme"
     var signingEnabled: Bool
     var vault: VaultState
-    var sshCommand: String? = nil    // the org's core.sshCommand (drives clones)
+    var sshCommand: String? = nil
+    /// Org-relative directories the Scanner skips. A view of the stored list,
+    /// filled in by OrgDiscovery like every other field here.
+    var scanExclusions: [String] = []    // the org's core.sshCommand (drives clones)
 
     /// Reference-key file Vaultkit writes into ~/.ssh for orgs it creates.
     var keyFileName: String { "id_sk_\(name)" }

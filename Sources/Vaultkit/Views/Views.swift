@@ -33,6 +33,8 @@ final class AppStore: ObservableObject {
     /// Non-nil → the paywall is up, naming the feature that was reached for.
     @Published var lockedFeature: Feature?
     @Published var showActivation = false
+    /// A manual licence check is in flight (the only one the user can see).
+    @Published var licenseChecking = false
     @Published var activating = false
     /// Act on critical hits the moment they are found. Warnings are never
     /// auto-actioned; a fix for those is a button.
@@ -538,6 +540,17 @@ final class AppStore: ObservableObject {
         historyStore.save(history)
     }
 
+    /// Change what an organization's scans skip. The Scanner has to forget what
+    /// it knows about that org first: its incremental pass only re-reads files
+    /// whose timestamps moved, so an un-excluded directory would stay unscanned
+    /// until something in it happened to change.
+    func setScanExclusions(_ paths: [String], for org: Organization) async {
+        ScanExclusions.save(paths, for: org.name)
+        await scanner.invalidate(org.name)
+        await refresh()
+        await runScan()
+    }
+
     /// Quarantined originals a given hold time would purge immediately. The
     /// UI asks before shortening past anything still restorable, because the
     /// purge cannot be undone.
@@ -702,9 +715,11 @@ final class AppStore: ObservableObject {
 
     /// Launch and once a day after: only actually reaches the network when the
     /// cached entitlement says a re-check is due.
-    func refreshLicense() async {
+    func refreshLicense(force: Bool = false) async {
         let before = license
-        license = await licenses.refreshIfDue()
+        licenseChecking = force
+        defer { licenseChecking = false }
+        license = await licenses.refreshIfDue(force: force)
 
         // A licence that just came back to life has a Scanner and an Activity
         // view that have been idle. Catch them up rather than waiting out the
