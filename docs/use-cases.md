@@ -67,7 +67,8 @@ Same as UC1 minus first-run setup; additionally verifies **cross-org isolation**
 ## UC5: Daily vault lifecycle (menu bar)
 
 - Mount/eject any org from the menu bar; states: none / locked / **mounted (exposed)** / busy.
-- Eject dissent handling: name user-level holders ("Terminal tab in ~/work/globex", "VS Code window"); recognize **root-level holders** (Spotlight indexing, antivirus scan) that user tools can't see: auto-retry with backoff instead of failing cryptically (I4).
+- Eject dissent handling: name user-level holders ("Terminal tab in ~/work/globex", "VS Code window") and offer to close them; recognize **root-level holders** (Spotlight indexing, antivirus scan) that user tools can't see: auto-retry with backoff instead of failing cryptically (I4).
+- Closing holders asks first (SIGTERM), so a process can flush and save, then re-reads the list rather than assuming it worked. Forcing is a second, explicit press, never an automatic escalation. Vaultkit never signals itself, pid 1, or a process belonging to another user: those are named as un-closable instead. Ten holders is the normal case, not three, so repeats are grouped by command and the warning says plainly that unsaved work may be lost.
 - Optional nudges: "Acme has been mounted for 6h. Still using it?"; "You're about to run an installer with 2 vaults mounted: eject first?"
 
 ## UC6: Doctor (drift detection)

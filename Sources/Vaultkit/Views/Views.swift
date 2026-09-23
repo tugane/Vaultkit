@@ -10,6 +10,7 @@ final class AppStore: ObservableObject {
     @Published var findings: [DoctorFinding] = []
     @Published var selection: SidebarItem? = .dashboard
     @Published var lastError: String?
+    @Published var ejectBlocked: EjectBlock?     // non-nil → the holders alert is up
     @Published var mountTarget: Organization?    // non-nil → passphrase sheet is up
     @Published var cloneTarget: Organization?    // non-nil → clone sheet is up
     @Published var busyOrgs: Set<String> = []    // orgs with an action in flight
@@ -436,7 +437,7 @@ final class AppStore: ObservableObject {
             // list means something root-owned. Ask again rather than say
             // nothing useful.
             let named = holders.isEmpty ? ((try? await vaults.dissenters(for: org)) ?? []) : holders
-            return .held(named)
+            return .held(named.map(\.label))
         } catch {
             return .failed(error.localizedDescription)
         }
@@ -629,6 +630,43 @@ final class AppStore: ObservableObject {
         defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.eject(org)
+        } catch let error as VaultError {
+            // Named holders are answerable: offer to close them rather than
+            // leave a list of pids and an OK button.
+            if case .busy(let holders) = error, !holders.isEmpty {
+                ejectBlocked = EjectBlock(org: org, holders: holders)
+            } else {
+                lastError = error.localizedDescription
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
+        await runDoctor()
+    }
+
+    /// Ask what is holding the vault to quit, then eject. The holders are
+    /// re-read rather than assumed gone: a process that ignores SIGTERM must
+    /// be reported, not silently forced.
+    func closeHoldersAndEject(_ block: EjectBlock, force: Bool) async {
+        let org = block.org
+        ejectBlocked = nil
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
+
+        let asked = vaults.askToQuit(block.holders, force: force)
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if ((try? await vaults.dissenters(for: org)) ?? []).isEmpty { break }
+        }
+        do {
+            try await vaults.eject(org)
+            lastError = "Closed \(plural(asked.count, "process", "processes")) and secured \(org.displayName)."
+        } catch let error as VaultError {
+            if case .busy(let holders) = error, !holders.isEmpty {
+                ejectBlocked = EjectBlock(org: org, holders: holders, wereAsked: true)
+            } else {
+                lastError = error.localizedDescription
+            }
         } catch {
             lastError = error.localizedDescription
         }
@@ -944,6 +982,21 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(store.lastError ?? "")
+        }
+        .alert(store.ejectBlocked.map { "Close what is using \($0.org.displayName)?" } ?? "",
+               isPresented: Binding(get: { store.ejectBlocked != nil },
+                                    set: { if !$0 { store.ejectBlocked = nil } }),
+               presenting: store.ejectBlocked) { block in
+            // Nothing offered when there is nothing this app may signal: a
+            // button that closes none of the holders is a lie.
+            if !block.mine.isEmpty {
+                Button(block.wereAsked ? "Force Quit and Eject" : "Close Them and Eject", role: .destructive) {
+                    Task { await store.closeHoldersAndEject(block, force: block.wereAsked) }
+                }
+            }
+            Button(block.mine.isEmpty ? "OK" : "Cancel", role: .cancel) { store.ejectBlocked = nil }
+        } message: { block in
+            Text(block.message)
         }
         .sheet(item: $store.mountTarget) { org in
             MountSheet(org: org)
@@ -1517,5 +1570,53 @@ struct MenuBarView: View {
         Button("Refresh") { Task { await store.refresh() } }
         Button("Open Vaultkit") { NSApp.activate(ignoringOtherApps: true) }
         Button("Quit") { NSApp.terminate(nil) }
+    }
+}
+
+/// An eject that could not proceed because something still has the vault open.
+/// Carries the holders so the alert can offer to close them, and remembers
+/// whether they have already been asked once: a process that ignored SIGTERM
+/// is a different decision from one that has not been asked yet.
+struct EjectBlock: Identifiable {
+    let id = UUID()
+    var org: Organization
+    var holders: [VaultHolder]
+    var wereAsked = false
+
+    /// Holders this app cannot signal: another user's, so only that user can
+    /// stop them. Naming them beats a silent failure to close them.
+    var theirs: [VaultHolder] { holders.filter { !$0.isMine } }
+    var mine: [VaultHolder] { DiskUtilVaultService.signalable(holders) }
+
+    /// Ten holders is the normal case, not three: a couple of shells, their
+    /// editors and a file watcher all count. Ten pids in an alert is a wall of
+    /// text, so repeats are grouped by command and only a lone process keeps
+    /// its pid, which is when the pid is actually useful.
+    var summary: String {
+        let groups = Dictionary(grouping: holders, by: \.command)
+            .sorted { a, b in
+                a.value.count != b.value.count ? a.value.count > b.value.count : a.key < b.key
+            }
+        let shown = groups.prefix(5).map { name, group in
+            group.count == 1 ? group[0].label : "\(name) (\(plural(group.count, "process", "processes")))"
+        }
+        let rest = groups.count - shown.count
+        return rest > 0 ? shown.joined(separator: ", ") + ", and \(plural(rest, "other"))"
+                        : shown.joined(separator: ", ")
+    }
+
+    var message: String {
+        var parts = ["Held open by \(summary)."]
+        if mine.isEmpty {
+            parts.append("None of them belong to you, so Vaultkit cannot close them.")
+        } else if wereAsked {
+            parts.append("They were asked to quit and did not. Forcing stops them immediately, without saving.")
+        } else {
+            parts.append("They will be asked to quit. Unsaved work in them may be lost.")
+        }
+        if !theirs.isEmpty, !mine.isEmpty {
+            parts.append("\(plural(theirs.count, "process", "processes")) \(theirs.count == 1 ? "belongs" : "belong") to another user and will be left alone.")
+        }
+        return parts.joined(separator: " ")
     }
 }
