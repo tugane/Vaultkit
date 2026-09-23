@@ -128,7 +128,7 @@ final class QuarantineExpiryTests: XCTestCase {
 
     func testOnlyItemsPastTheHoldTimeExpire() {
         let items = [item(ageSeconds: 0), item(ageSeconds: 599), item(ageSeconds: 601), item(ageSeconds: 4000)]
-        let due = QuarantineService.expired(items, now: Date(), ttl: AppStore.quarantineTTL)
+        let due = QuarantineService.expired(items, now: Date(), ttl: QuarantineHold.standard)
         XCTAssertEqual(due.count, 2)
         XCTAssertTrue(due.allSatisfy { Date().timeIntervalSince($0.date) >= 600 })
     }
@@ -171,5 +171,44 @@ final class QuarantineExpiryTests: XCTestCase {
         Task { out = await ScannerService().scan(orgs: [org]).1.first!; done.signal() }
         done.wait()
         return out
+    }
+}
+
+/// The hold time became a setting, so the value itself needs pinning: it is the
+/// window between "that was a false positive" and the file being gone.
+final class QuarantineHoldTests: XCTestCase {
+    private var suite: String!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        suite = "vaultkit-hold-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+    }
+    override func tearDown() { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+    func testDefaultsToTheShippedTenMinutes() {
+        XCTAssertEqual(QuarantineHold.load(from: defaults), 600)
+    }
+
+    func testRoundTrips() {
+        QuarantineHold.save(86_400, to: defaults)
+        XCTAssertEqual(QuarantineHold.load(from: defaults), 86_400)
+    }
+
+    /// A hand-edited plist should not be able to set a three-second hold and
+    /// turn quarantine into deletion.
+    func testAValueOutsideTheOfferedSetIsIgnored() {
+        QuarantineHold.save(3, to: defaults)
+        XCTAssertEqual(QuarantineHold.load(from: defaults), QuarantineHold.standard)
+    }
+
+    /// The old copy divided by 60 everywhere, which would read "10080 minutes"
+    /// now that a week is offered.
+    func testLabelsReadAsDurationsNotMinutes() {
+        XCTAssertEqual(QuarantineHold.label(600), "10 minutes")
+        XCTAssertEqual(QuarantineHold.label(3600), "1 hour")
+        XCTAssertEqual(QuarantineHold.label(86_400), "1 day")
+        XCTAssertEqual(QuarantineHold.label(604_800), "1 week")
+        XCTAssertEqual(QuarantineHold.choices.map(QuarantineHold.short), ["10m", "1h", "1d", "1w"])
     }
 }

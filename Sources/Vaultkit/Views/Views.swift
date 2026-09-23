@@ -69,6 +69,11 @@ final class AppStore: ObservableObject {
     @Published var autoSecure = AutoSecurePolicy.load() {
         didSet { autoSecure.save() }
     }
+    /// How long a quarantined original is held before it is purged for good.
+    /// Restore is only possible inside this window.
+    @Published var quarantineHold = QuarantineHold.load() {
+        didSet { QuarantineHold.save(quarantineHold) }
+    }
     /// Recent automatic attempts, newest first. Capped: this is a record to
     /// glance at, not a log.
     @Published var autoSecureEvents: [AutoSecureEvent] = []
@@ -87,9 +92,6 @@ final class AppStore: ObservableObject {
 
     /// How often mounted vaults are re-checked for changed files.
     static let scanInterval: TimeInterval = 300
-    /// How long a quarantined original is held before it is purged for good.
-    /// Restore is only possible inside this window.
-    static let quarantineTTL: TimeInterval = 600
     /// How long a quarantined original is held before it is purged for good.
     /// Restore is only possible inside this window.
     private var mountedNames: Set<String> = []
@@ -523,19 +525,26 @@ final class AppStore: ObservableObject {
         historyStore.save(history)
     }
 
+    /// Quarantined originals a given hold time would purge immediately. The
+    /// UI asks before shortening past anything still restorable, because the
+    /// purge cannot be undone.
+    func quarantineAtRisk(under hold: TimeInterval) -> Int {
+        QuarantineService.expired(quarantine, now: Date(), ttl: hold).count
+    }
+
     /// Purge quarantined originals past their hold time. Only reaches mounted
     /// vaults. Items in a locked vault are ciphertext and simply wait for the
     /// next mount, which is the correct outcome either way.
     func sweepQuarantine() {
-        let due = QuarantineService.expired(quarantine, now: Date(), ttl: Self.quarantineTTL)
+        let due = QuarantineService.expired(quarantine, now: Date(), ttl: quarantineHold)
         guard !due.isEmpty else { return }
-        let minutes = Int(Self.quarantineTTL / 60)
+        let held = QuarantineHold.label(quarantineHold)
         for item in due {
             guard let org = organizations.first(where: { $0.name == item.orgName }) else { continue }
             let root = (org.folderPath as NSString).expandingTildeInPath
             guard let event = try? quarantineService.purge(
                 item, vaultRoot: root,
-                detail: "Purged automatically \(plural(minutes, "minute")) after quarantine.") else { continue }
+                detail: "Purged automatically \(held) after quarantine.") else { continue }
             history.actions.insert(event, at: 0)
         }
         historyStore.save(history)

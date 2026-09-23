@@ -7,6 +7,9 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.palette) private var p
 
+    /// A shorter hold can purge things that are still restorable, and the
+    /// purge is permanent. Non-nil → the confirmation is up.
+    @State private var pendingHold: TimeInterval?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +38,7 @@ struct SettingsView: View {
 
                     SectionLabel("Scanner").padding(.top, 26).padding(.bottom, 10)
                     quarantineToggle
+                    quarantineHold
 
 
                 }
@@ -42,6 +46,19 @@ struct SettingsView: View {
                 .padding(.bottom, 32)
             }
         }
+        .alert("Purge held originals now?", isPresented: showingHoldWarning) {
+            Button("Cancel", role: .cancel) { pendingHold = nil }
+            Button("Shorten and purge", role: .destructive) {
+                if let pendingHold { store.quarantineHold = pendingHold }
+                pendingHold = nil
+            }
+        } message: {
+            Text("\(plural(store.quarantineAtRisk(under: pendingHold ?? 0), "quarantined original")) would be older than the new hold and purged on the next sweep. That cannot be undone \u{2014} restore anything you still want first.")
+        }
+    }
+
+    private var showingHoldWarning: Binding<Bool> {
+        Binding(get: { pendingHold != nil }, set: { if !$0 { pendingHold = nil } })
     }
 
     // MARK: vaults
@@ -174,6 +191,27 @@ struct SettingsView: View {
     }
 
     // MARK: scanner
+
+    private var quarantineHold: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Field("Hold originals") {
+                Choices(values: QuarantineHold.choices,
+                        selected: store.quarantineHold,
+                        label: QuarantineHold.short) { chosen in
+                    // Lengthening is always safe. Shortening can delete
+                    // something still restorable, so it asks.
+                    if chosen < store.quarantineHold, store.quarantineAtRisk(under: chosen) > 0 {
+                        pendingHold = chosen
+                    } else {
+                        store.quarantineHold = chosen
+                    }
+                }
+            }
+            Note(symbol: "info.circle", tint: p.label3,
+                 text: "A quarantined file is moved inside the vault, not deleted, and restoring it is the only way to get it back. After \(QuarantineHold.label(store.quarantineHold)) the original is purged for good. Held bytes stay encrypted at rest and count against the vault's space until then.")
+        }
+        .padding(.top, 10)
+    }
 
     private var quarantineToggle: some View {
         Row(on: store.autoQuarantine,
