@@ -64,6 +64,26 @@ final class AppStore: ObservableObject {
     /// the same name is already there. Never overwritten, always reported.
     @Published var unguardedRepos: [String] = []
 
+    /// When vaults close on their own. Changing it rewrites the stored policy;
+    /// nothing else needs to react, because every trigger reads it fresh.
+    @Published var autoSecure = AutoSecurePolicy.load() {
+        didSet { autoSecure.save() }
+    }
+    /// Recent automatic attempts, newest first. Capped: this is a record to
+    /// glance at, not a log.
+    @Published var autoSecureEvents: [AutoSecureEvent] = []
+    /// One sweep at a time. The idle check runs on the ten-second refresh, and
+    /// an eject can take longer than that.
+    @Published private(set) var autoSecuring = false
+
+    /// Set while the machine has been idle past the threshold, cleared when the
+    /// user comes back. Without it the sweep would retry every ten seconds all
+    /// night against a vault something is holding.
+    private var idleFired = false
+    /// org.name → when we last said out loud that it was held, so a vault open
+    /// all afternoon does not notify every ten seconds.
+    private var heldNotifiedAt: [String: Date] = [:]
+    private static let heldNotifyInterval: TimeInterval = 1800
 
     /// How often mounted vaults are re-checked for changed files.
     static let scanInterval: TimeInterval = 300
@@ -107,6 +127,28 @@ final class AppStore: ObservableObject {
                 Task { @MainActor in await self?.refresh() }
             }
         }
+
+        // Auto-secure's three ambient triggers. The fourth, quit, is the app
+        // delegate's: it has to hold termination open while the sweep runs.
+        //
+        // Sleep is best effort by construction. macOS does not wait for us, one
+        // eject can take longer than the grace it gives, and blocking sleep to
+        // finish would be a worse bargain than leaving the vault for the idle
+        // check to pick up on wake.
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.autoSecureSweep(trigger: .sleep) }
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.refresh() }
+        }
+        // Screen lock has no deadline and maps to the moment someone walks
+        // away, which makes it the most useful of the three.
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.autoSecureSweep(trigger: .screenLock) }
+        }
+        AutoSecureTermination.store = self
 
         // NSWorkspace only notices /Volumes-scope mounts: canonical-path mounts
         // (diskutil -mountpoint ~/work/<org>, i.e. work-on and our own) bypass
@@ -313,6 +355,108 @@ final class AppStore: ObservableObject {
                body: "In \(repos). Replacing a commit that is already signed is how an altered one is made to look ordinary. Nothing was changed.")
     }
 
+    // MARK: auto-secure
+
+    /// Polled from refresh, so no timer of its own. Arms on the way past the
+    /// threshold and disarms when the user comes back, which is what keeps a
+    /// held vault from being retried every ten seconds all night.
+    func checkIdle() async {
+        guard autoSecure.allows(.idle) else { idleFired = false; return }
+        guard SystemIdle.seconds() >= TimeInterval(autoSecure.idleMinutes * 60) else {
+            idleFired = false
+            return
+        }
+        guard !idleFired else { return }
+        idleFired = true
+        await autoSecureSweep(trigger: .idle)
+    }
+
+    var hasVaultsToSecureOnQuit: Bool {
+        !autoSecure.targets(for: .quit, idleSeconds: 0, exposed: exposedOrgs, busy: busyOrgs).isEmpty
+    }
+
+    /// Put every vault this trigger covers back to rest. Never writes
+    /// `lastError`: this runs unattended, and a modal alert raised by a timer
+    /// is something you cannot work through.
+    func autoSecureSweep(trigger: SecureTrigger) async {
+        guard !autoSecuring else { return }
+        let targets = autoSecure.targets(for: trigger, idleSeconds: SystemIdle.seconds(),
+                                         exposed: exposedOrgs, busy: busyOrgs)
+        guard !targets.isEmpty else { return }
+
+        autoSecuring = true
+        defer { autoSecuring = false }
+        announceAutoSecureOnce()
+
+        var secured: [Organization] = []
+        var held: [(org: Organization, holders: [String])] = []
+        for org in targets {
+            let outcome = await autoEject(org)
+            autoSecureEvents.insert(
+                AutoSecureEvent(at: Date(), org: org.name, trigger: trigger, outcome: outcome), at: 0)
+            switch outcome {
+            case .secured: secured.append(org)
+            case .held(let holders): held.append((org, holders))
+            case .failed: break
+            }
+        }
+        autoSecureEvents = Array(autoSecureEvents.prefix(50))
+        await refresh()
+        report(secured: secured, held: held, trigger: trigger)
+    }
+
+    /// The automatic path's eject. Same work as `eject`, but the failure comes
+    /// back as a value, and a volume that is busy is asked who is holding it
+    /// rather than reduced to a sentence.
+    private func autoEject(_ org: Organization) async -> AutoSecureOutcome {
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
+        do {
+            try await vaults.eject(org)
+            return .secured
+        } catch let error as VaultError {
+            guard case .busy(let holders) = error else { return .failed(error.localizedDescription) }
+            // lsof only reliably names this user's own processes, so an empty
+            // list means something root-owned. Ask again rather than say
+            // nothing useful.
+            let named = holders.isEmpty ? ((try? await vaults.dissenters(for: org)) ?? []) : holders
+            return .held(named)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func report(secured: [Organization], held: [(org: Organization, holders: [String])],
+                        trigger: SecureTrigger) {
+        if !secured.isEmpty {
+            notify(title: "\(plural(secured.count, "vault")) secured",
+                   body: "\(secured.map(\.displayName).joined(separator: ", ")) went back to rest because \(trigger.label).")
+        }
+
+        // A vault held open all afternoon is worth saying once, not 170 times.
+        let now = Date()
+        let due = held.filter { now.timeIntervalSince(heldNotifiedAt[$0.org.name] ?? .distantPast) >= Self.heldNotifyInterval }
+        guard !due.isEmpty else { return }
+        for entry in due { heldNotifiedAt[entry.org.name] = now }
+
+        let names = due.map(\.org.displayName).joined(separator: ", ")
+        let holders = Array(Set(due.flatMap(\.holders))).sorted()
+        notify(title: "\(plural(due.count, "vault")) could not be secured",
+               body: holders.isEmpty
+                   ? "\(names) is still in use, so it stays mounted. Vaultkit will try again when the Mac next goes idle."
+                   : "\(names) is held by \(holders.prefix(3).joined(separator: ", ")). It stays mounted until they let go.")
+    }
+
+    /// An install that updates into this gets a Mac that starts closing its own
+    /// vaults. Say so once, rather than let it be discovered as an unexplained
+    /// passphrase prompt.
+    private func announceAutoSecureOnce() {
+        guard AutoSecurePolicy.needsAnnouncing() else { return }
+        AutoSecurePolicy.markAnnounced()
+        notify(title: "Vaultkit now secures vaults on its own",
+               body: "Vaults go back to rest after \(plural(autoSecure.idleMinutes, "minute")) idle, and on screen lock, sleep and quit. Settings has the switch.")
+    }
+
     func runDoctor() async {
         doctorRunning = true
         await refresh()
@@ -348,6 +492,7 @@ final class AppStore: ObservableObject {
         // the scan cadence, because an alarm five minutes late is not an alarm.
         readRewriteAttempts()
 
+        await checkIdle()
 
         // Runs on the 10-second refresh rather than the scan tick, so the hold
         // time is honoured to the second and the countdown in the UI ticks.
@@ -402,13 +547,13 @@ final class AppStore: ObservableObject {
     /// Falls back to the sheet if the keys drop mid-way.
     func relocate(_ org: Organization) async {
         busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.mount(org, passphrase: "")
         } catch {
             mountTarget = org
         }
         await runDoctor()
-        busyOrgs.remove(org.name)
     }
 
     /// Clone into the org's vault with the org's key (Touch ID prompt),
@@ -435,24 +580,24 @@ final class AppStore: ObservableObject {
 
     func mount(_ org: Organization, passphrase: String) async {
         busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.mount(org, passphrase: passphrase)
         } catch {
             lastError = error.localizedDescription
         }
         await runDoctor()   // mutations refresh findings too
-        busyOrgs.remove(org.name)
     }
 
     func eject(_ org: Organization) async {
         busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.eject(org)
         } catch {
             lastError = error.localizedDescription
         }
         await runDoctor()
-        busyOrgs.remove(org.name)
     }
 
     /// Put every exposed vault at rest (mounted, unlocked, or misplaced).

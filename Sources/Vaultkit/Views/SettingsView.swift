@@ -11,17 +11,23 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Settings") {
-                if !store.rewriteAttempts.isEmpty {
-                    IconButton(symbol: "trash", help: "Clear the record of refused rewrites") {
+                if !store.rewriteAttempts.isEmpty || !store.autoSecureEvents.isEmpty {
+                    IconButton(symbol: "trash", help: "Clear the records below") {
                         store.rewriteGuard.forgetAttempts()
                         store.rewriteAttempts = []
+                        store.autoSecureEvents = []
                     }
                 }
             }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    SectionLabel("History").padding(.bottom, 10)
+                    SectionLabel("Vaults").padding(.bottom, 10)
+                    autoSecureToggle
+                    if store.autoSecure.enabled { autoSecureDetail }
+                    if !store.autoSecureEvents.isEmpty { autoSecureRecord }
+
+                    SectionLabel("History").padding(.top, 26).padding(.bottom, 10)
                     guardToggle
                     if store.blockRewrites { rewriteExemptions; consequences }
                     if !store.unguardedRepos.isEmpty { conflicts }
@@ -36,6 +42,83 @@ struct SettingsView: View {
                 .padding(.bottom, 32)
             }
         }
+    }
+
+    // MARK: vaults
+
+    private var autoSecureToggle: some View {
+        Row(on: store.autoSecure.enabled,
+            title: "Secure vaults automatically",
+            detail: "An organization's code is only ciphertext while its vault is at rest, and a vault nobody ejects is never at rest. This puts them back by itself.") {
+            store.autoSecure.enabled.toggle()
+        }
+    }
+
+    private var autoSecureDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Field("Secure after") {
+                Choices(values: AutoSecurePolicy.idleChoices,
+                        selected: store.autoSecure.idleMinutes,
+                        label: { $0 < 60 ? "\($0)m" : "\($0 / 60)h" }) {
+                    store.autoSecure.idleMinutes = $0
+                }
+            }
+
+            Field("Also when") {
+                VStack(alignment: .leading, spacing: 7) {
+                    SubToggle(on: store.autoSecure.onScreenLock, title: "the screen locks") {
+                        store.autoSecure.onScreenLock.toggle()
+                    }
+                    SubToggle(on: store.autoSecure.onSleep, title: "the Mac sleeps") {
+                        store.autoSecure.onSleep.toggle()
+                    }
+                    SubToggle(on: store.autoSecure.onQuit, title: "Vaultkit quits") {
+                        store.autoSecure.onQuit.toggle()
+                    }
+                }
+            }
+
+            if store.organizations.count > 1 {
+                Field("Never secure") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(store.organizations) { org in
+                            SubToggle(on: store.autoSecure.exempt.contains(org.name),
+                                      title: org.displayName) {
+                                if store.autoSecure.exempt.contains(org.name) {
+                                    store.autoSecure.exempt.remove(org.name)
+                                } else {
+                                    store.autoSecure.exempt.insert(org.name)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Note(symbol: "info.circle", tint: p.label3,
+                 text: "Re-mounting needs the passphrase again, so a vault secured while you were away costs you one unlock. A vault something is still using is left mounted and named rather than forced shut. Sleep is best effort: macOS does not always allow enough time, and anything left open is picked up on the next idle check.")
+        }
+    }
+
+    private var autoSecureRecord: some View {
+        Record(title: "Secured",
+               caption: "What Vaultkit closed on its own, and what it could not.",
+               rows: store.autoSecureEvents.prefix(15).map { event in
+            switch event.outcome {
+            case .secured:
+                return Record.Row(id: event.id, symbol: "lock.fill", tint: p.green,
+                                  title: event.org, detail: "secured because \(event.trigger.label)", at: event.at)
+            case .held(let holders):
+                return Record.Row(id: event.id, symbol: "lock.open.trianglebadge.exclamationmark", tint: p.amber,
+                                  title: event.org,
+                                  detail: holders.isEmpty ? "still in use, left mounted"
+                                                          : "held by \(holders.prefix(2).joined(separator: ", ")), left mounted",
+                                  at: event.at)
+            case .failed(let why):
+                return Record.Row(id: event.id, symbol: "exclamationmark.triangle.fill", tint: p.red,
+                                  title: event.org, detail: why, at: event.at)
+            }
+        })
     }
 
     // MARK: history
@@ -181,6 +264,31 @@ private struct SubToggle: View {
 }
 
 /// A one-of-N picker as pills, for values short enough to show them all.
+private struct Choices<Value: Hashable>: View {
+    let values: [Value]
+    let selected: Value
+    let label: (Value) -> String
+    let pick: (Value) -> Void
+    @Environment(\.palette) private var p
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(values, id: \.self) { value in
+                Button { pick(value) } label: {
+                    Text(label(value))
+                        .font(.system(size: 12, weight: value == selected ? .semibold : .regular))
+                        .foregroundStyle(value == selected ? .white : p.label2)
+                        .frame(width: 42, height: 26)
+                        .card(value == selected ? p.accent : p.btn, radius: 7)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverPointer()
+            }
+        }
+    }
+}
+
 /// Comma-separated paths, applied on Return. Deliberately not a live binding:
 /// every commit re-runs a full scan of that vault.
 private struct Note: View {
