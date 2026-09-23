@@ -21,7 +21,28 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+# A full Xcode is required: CommandLineTools has no SwiftUI macro plugin and
+# the build dies on a macro error. Prefer whatever xcode-select points at when
+# that is a real Xcode, then fall back to the usual install locations. This
+# used to hard-code the beta path, which broke the moment the beta was removed.
+pick_developer_dir() {
+  local selected
+  selected="$(xcode-select -p 2>/dev/null || true)"
+  case "$selected" in
+    */Xcode*.app/Contents/Developer) printf '%s' "$selected"; return;;
+  esac
+  local candidate
+  for candidate in /Applications/Xcode.app/Contents/Developer \
+                   /Applications/Xcode-beta.app/Contents/Developer; do
+    [ -d "$candidate" ] && { printf '%s' "$candidate"; return; }
+  done
+  printf '%s' "$selected"
+}
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(pick_developer_dir)}"
+if [ ! -d "$DEVELOPER_DIR" ]; then
+  echo "No Xcode found. Install Xcode, or set DEVELOPER_DIR to its Contents/Developer." >&2
+  exit 1
+fi
 
 IDENTITY="${VAULTKIT_IDENTITY:-Developer ID Application: Amiel Tugane Mutarataza (A98VDXK9K4)}"
 PROFILE="${VAULTKIT_NOTARY_PROFILE:-auger-notary}"
