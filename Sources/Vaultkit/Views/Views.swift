@@ -74,6 +74,10 @@ final class AppStore: ObservableObject {
     @Published var quarantineHold = QuarantineHold.load() {
         didSet { QuarantineHold.save(quarantineHold) }
     }
+    /// Which events are worth interrupting someone for.
+    @Published var notifications = NotificationPolicy.load() {
+        didSet { notifications.save() }
+    }
     /// Recent automatic attempts, newest first. Capped: this is a record to
     /// glance at, not a log.
     @Published var autoSecureEvents: [AutoSecureEvent] = []
@@ -244,13 +248,20 @@ final class AppStore: ObservableObject {
         historyStore.save(history)
         reloadQuarantine()
 
-        if !found.isEmpty {
-            let neutralized = actions.filter { $0.kind == .cleaned || $0.kind == .quarantined }.count
+        // Acting on something is always news. A finding that is merely still
+        // there is not: this used to fire on every pass, so one hit nobody
+        // could fix announced itself every five minutes until it was fixed or
+        // the app was quit.
+        let neutralized = actions.filter { $0.kind == .cleaned || $0.kind == .quarantined }.count
+        if notifications.scannerHits, neutralized > 0 || NotificationPolicy.isNew(found) {
             notify(title: neutralized > 0
                        ? "Vaultkit neutralized \(plural(neutralized, "PolinRider hit"))"
                        : "Vaultkit found \(plural(found.count, "PolinRider indicator"))",
                    body: found.prefix(3).map { "\($0.repo): \($0.path)" }.joined(separator: "\n"))
         }
+        // Recorded whatever the switch says, so turning notifications back on
+        // does not replay everything that was found while they were off.
+        NotificationPolicy.remember(found)
         nextScanAt = Date().addingTimeInterval(Self.scanInterval)
         scanRunning = false
     }
@@ -351,6 +362,7 @@ final class AppStore: ObservableObject {
         let fresh = rewriteAttempts.filter { $0.at > seen }
         guard let newest = fresh.first else { return }
         UserDefaults.standard.set(newest.at, forKey: "vk.rewriteAttemptSeen")
+        guard notifications.rewriteRefusals else { return }
 
         let repos = Set(fresh.map(\.repo)).sorted().joined(separator: ", ")
         notify(title: fresh.count == 1 ? "History rewrite refused" : "\(fresh.count) history rewrites refused",
@@ -430,6 +442,7 @@ final class AppStore: ObservableObject {
 
     private func report(secured: [Organization], held: [(org: Organization, holders: [String])],
                         trigger: SecureTrigger) {
+        guard notifications.autoSecure else { return }
         if !secured.isEmpty {
             notify(title: "\(plural(secured.count, "vault")) secured",
                    body: "\(secured.map(\.displayName).joined(separator: ", ")) went back to rest because \(trigger.label).")

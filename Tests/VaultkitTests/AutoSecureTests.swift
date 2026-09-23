@@ -142,3 +142,71 @@ final class AutoSecureTests: XCTestCase {
         XCTAssertLessThan(seconds, 60 * 60 * 24 * 7)
     }
 }
+
+/// The Scanner announced findings on every pass, so one hit nobody could fix
+/// notified every five minutes until the app was quit. These pin the rule that
+/// replaced it.
+final class NotificationPolicyTests: XCTestCase {
+    private var suite: String!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        suite = "vaultkit-notify-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+    }
+    override func tearDown() { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+    private func finding(_ path: String, indicator: String = "PolinRider loader") -> ScanFinding {
+        ScanFinding(orgName: "hup", repo: "hup-api", path: path, absolutePath: "/tmp/\(path)",
+                    indicator: indicator, severity: .critical, evidence: "e", remediation: "r", fix: .manual)
+    }
+
+    func testEverythingIsOnByDefaultAndRoundTrips() {
+        XCTAssertEqual(NotificationPolicy.load(from: defaults), .standard)
+        var p = NotificationPolicy.standard
+        p.scannerHits = false
+        p.save(to: defaults)
+        XCTAssertFalse(NotificationPolicy.load(from: defaults).scannerHits)
+        XCTAssertTrue(NotificationPolicy.load(from: defaults).rewriteRefusals,
+                      "silencing one event must not silence the others")
+    }
+
+    func testAStandingFindingIsAnnouncedOnceNotEveryPass() {
+        let found = [finding("src/a.js")]
+        XCTAssertTrue(NotificationPolicy.isNew(found, in: defaults))
+        NotificationPolicy.remember(found, in: defaults)
+        XCTAssertFalse(NotificationPolicy.isNew(found, in: defaults), "the same finding is not news twice")
+    }
+
+    func testANewFindingBreaksThrough() {
+        NotificationPolicy.remember([finding("src/a.js")], in: defaults)
+        XCTAssertTrue(NotificationPolicy.isNew([finding("src/a.js"), finding("src/b.js")], in: defaults))
+    }
+
+    /// Findings carry a fresh UUID per scan, so identity has to come from what
+    /// and where — otherwise every pass looks new and nothing is deduplicated.
+    func testIdentityIgnoresPerRunIds() {
+        let one = [finding("src/a.js")]
+        let again = [finding("src/a.js")]
+        XCTAssertNotEqual(one[0].id, again[0].id)
+        XCTAssertEqual(NotificationPolicy.signature(of: one), NotificationPolicy.signature(of: again))
+    }
+
+    func testOrderDoesNotMakeItNew() {
+        let a = finding("src/a.js"), b = finding("src/b.js")
+        XCTAssertEqual(NotificationPolicy.signature(of: [a, b]), NotificationPolicy.signature(of: [b, a]))
+    }
+
+    func testACleanScanIsNeverAnnounced() {
+        XCTAssertFalse(NotificationPolicy.isNew([], in: defaults))
+    }
+
+    /// Clearing the findings then hitting the same problem again should notify:
+    /// it is a recurrence, not a continuation.
+    func testAFindingThatComesBackIsNewsAgain() {
+        let found = [finding("src/a.js")]
+        NotificationPolicy.remember(found, in: defaults)
+        NotificationPolicy.remember([], in: defaults)
+        XCTAssertTrue(NotificationPolicy.isNew(found, in: defaults))
+    }
+}

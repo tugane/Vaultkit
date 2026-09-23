@@ -40,6 +40,8 @@ struct SettingsView: View {
                     quarantineToggle
                     quarantineHold
 
+                    SectionLabel("Notifications").padding(.top, 26).padding(.bottom, 10)
+                    notificationChoices
 
                 }
                 .padding(.horizontal, 40)
@@ -188,6 +190,29 @@ struct SettingsView: View {
                        detail: "\($0.oldOID.prefix(7)) would have become \($0.newOID.prefix(7))",
                        at: $0.at)
         })
+    }
+
+    // MARK: notifications
+
+    private var notificationChoices: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Field("Tell me about") {
+                VStack(alignment: .leading, spacing: 7) {
+                    SubToggle(on: store.notifications.scannerHits, title: "compromise indicators found") {
+                        store.notifications.scannerHits.toggle()
+                    }
+                    SubToggle(on: store.notifications.rewriteRefusals, title: "refused history rewrites") {
+                        store.notifications.rewriteRefusals.toggle()
+                    }
+                    SubToggle(on: store.notifications.autoSecure, title: "vaults secured, and vaults that would not close") {
+                        store.notifications.autoSecure.toggle()
+                    }
+                }
+            }
+            Note(symbol: "info.circle", tint: p.label3,
+                 text: "Per event, because macOS only offers one switch for the whole app: silencing a chatty Scanner there would also silence the rewrite alarm, which is the one that might mean somebody else is on this Mac. A finding is announced when it first appears and when something is done about it, never once per pass.")
+        }
+        .padding(.top, 2)
     }
 
     // MARK: scanner
