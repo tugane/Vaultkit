@@ -40,11 +40,38 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(autoQuarantine, forKey: "vk.scanner.autoQuarantine") }
     }
 
+    /// Refuse history rewriting inside the vaults. On by default: signing every
+    /// commit buys nothing if a commit can afterwards be quietly replaced, and
+    /// replacing one is how the campaign this app was built after moved. It is
+    /// a setting because rebasing your own work is legitimate, and the person
+    /// who wants that should be able to say so and be told what it costs.
+    @Published var blockRewrites = UserDefaults.standard.object(forKey: RewriteGuard.defaultsKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(blockRewrites, forKey: RewriteGuard.defaultsKey)
+            applyRewriteGuard()
+        }
+    }
+    /// Organizations left out of the rewrite guard, by name.
+    @Published var rewriteExempt = RewriteGuard.exempt() {
+        didSet {
+            RewriteGuard.setExempt(rewriteExempt)
+            applyRewriteGuard()
+        }
+    }
+    /// Refusals the hook recorded, newest first.
+    @Published var rewriteAttempts: [RewriteAttempt] = []
+    /// Repositories the guard could not take, because another tool's hook of
+    /// the same name is already there. Never overwritten, always reported.
+    @Published var unguardedRepos: [String] = []
+
+
     /// How often mounted vaults are re-checked for changed files.
     static let scanInterval: TimeInterval = 300
     /// How long a quarantined original is held before it is purged for good.
     /// Restore is only possible inside this window.
     static let quarantineTTL: TimeInterval = 600
+    /// How long a quarantined original is held before it is purged for good.
+    /// Restore is only possible inside this window.
     private var mountedNames: Set<String> = []
 
     let vaults = DiskUtilVaultService()
@@ -53,6 +80,7 @@ final class AppStore: ObservableObject {
     let activityService = ActivityService()
     let historyStore = HistoryStore()
     let doctor = DoctorService()
+    let rewriteGuard = RewriteGuard()
     let git = GitService()
     let keys = EnclaveKeyService()
     let gitConfig = GitConfigService()
@@ -257,6 +285,34 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: history-rewrite guard
+
+    /// Bring every mounted vault into line with the setting. Idempotent, so it
+    /// can run on any mount change without keeping track of what it did last.
+    func applyRewriteGuard() {
+        let guarded = blockRewrites ? organizations.filter { !rewriteExempt.contains($0.name) } : []
+        let unguarded = organizations.filter { org in !guarded.contains { $0.name == org.name } }
+        // Turning the guard off, or exempting an org, has to take the hook back
+        // out: leaving it behind would keep refusing rewrites with nothing in
+        // the UI to explain why.
+        rewriteGuard.uninstall(from: unguarded)
+        unguardedRepos = rewriteGuard.install(in: guarded).conflicted
+    }
+
+    /// Notify once per refusal. The journal is the record; this is the part
+    /// that makes it an alarm rather than a log nobody opens.
+    func readRewriteAttempts() {
+        rewriteAttempts = rewriteGuard.attempts()
+        let seen = UserDefaults.standard.object(forKey: "vk.rewriteAttemptSeen") as? Date ?? .distantPast
+        let fresh = rewriteAttempts.filter { $0.at > seen }
+        guard let newest = fresh.first else { return }
+        UserDefaults.standard.set(newest.at, forKey: "vk.rewriteAttemptSeen")
+
+        let repos = Set(fresh.map(\.repo)).sorted().joined(separator: ", ")
+        notify(title: fresh.count == 1 ? "History rewrite refused" : "\(fresh.count) history rewrites refused",
+               body: "In \(repos). Replacing a commit that is already signed is how an altered one is made to look ordinary. Nothing was changed.")
+    }
+
     func runDoctor() async {
         doctorRunning = true
         await refresh()
@@ -283,7 +339,15 @@ final class AppStore: ObservableObject {
         if nowMounted != mountedNames {
             mountedNames = nowMounted
             Task { await runScan() }
+            // A vault's repositories only exist while it is mounted, and a
+            // repository cloned since the last mount has no hook yet.
+            applyRewriteGuard()
         }
+
+        // Cheap: one small file. Worth doing on the ten-second tick rather than
+        // the scan cadence, because an alarm five minutes late is not an alarm.
+        readRewriteAttempts()
+
 
         // Runs on the 10-second refresh rather than the scan tick, so the hold
         // time is honoured to the second and the countdown in the UI ticks.
@@ -621,6 +685,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
     case doctor = "Doctor"
     case scanner = "Scanner"
     case activity = "Activity"
+    case settings = "Settings"
 
     var id: String { rawValue }
 
@@ -632,6 +697,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .doctor: "stethoscope"
         case .scanner: "magnifyingglass"
         case .activity: "waveform.path.ecg.rectangle"
+        case .settings: "slider.horizontal.3"
         }
     }
 
@@ -644,6 +710,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .doctor: "waveform.path.ecg"
         case .scanner: "magnifyingglass.circle.fill"
         case .activity: "waveform"
+        case .settings: "gearshape.fill"
         }
     }
 }
@@ -675,6 +742,7 @@ struct ContentView: View {
                     case .activity:
                         if store.license.allows(.activity) { ActivityView() }
                         else { LockedPage(feature: .activity) }
+                    case .settings: SettingsView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
