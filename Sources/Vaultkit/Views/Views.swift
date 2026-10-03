@@ -966,12 +966,16 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // The backdrop belongs to the page, not to the chrome above it.
+                // Applied to the whole column it also sat behind the licence
+                // banner, whose background is a 13% tint, so the strip turned
+                // blue wherever the glow reached it and amber everywhere else.
+                .background { PageBackdrop(symbol: page.backdropSymbol) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Animate the content only: animating the sidebar cross-fades the
             // nav highlight and briefly lights two rows.
             .animation(.easeInOut(duration: 0.2), value: page)
-            .background { PageBackdrop(symbol: page.backdropSymbol) }
             .background(p.content)
         }
         .ignoresSafeArea(.container, edges: .top)
