@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tugane/TuganeDesign.git",
       "state" : {
-        "revision" : "fe277011a160cf3b5e25ae31a296873dd41bcea0",
-        "version" : "0.1.2"
+        "revision" : "b0277b9c1d37fb7d9ff321fad415cd63e38d8992",
+        "version" : "0.1.3"
       }
     }
   ],
