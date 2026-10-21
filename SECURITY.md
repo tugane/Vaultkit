@@ -45,18 +45,12 @@ no trust-on-first-use path in the app.
 
 **Nothing secret is stored.** Vaultkit keeps no tokens, no passwords and no
 passphrases. The one file it keeps, the Scanner's history in Application Support, holds
-org names, repo-relative paths and indicator names, never file contents. Its keychain
-items hold licence state only: a trial date and a signed entitlement, nothing of yours.
+org names, repo-relative paths and indicator names, never file contents.
 
-**Its one network client is the licence check.** From 0.2.0 Vaultkit activates a licence
-key and re-confirms it about weekly, sending the key, a salted one-way hash of this
-Mac's hardware UUID, and the computer name — the full list is in
-[PRIVACY.md](PRIVACY.md). The trial is entirely offline. That endpoint is written to be
-untrusted: entitlements are Ed25519-signed by a key whose private half never leaves the
-licensing service, and the app verifies every response against the public half compiled
-into it. A compromised licensing service, or a proxy terminating TLS, can deny you a
-licence. It cannot grant itself anything on your Mac, and it is never told your
-organizations, hostnames, emails or findings.
+**It has no network client at all.** Vaultkit makes no request of its own, to anyone,
+ever. There is no server to compromise, no endpoint to intercept and no credential of
+yours in flight, because none is sent. The only connections are the SSH ones you ask
+for, straight to your own forge. [PRIVACY.md](PRIVACY.md) sets this out in full.
 
 ## What it does not guarantee
 
@@ -137,15 +131,12 @@ each release publishes the DMG's SHA-256. That proves the build came from the ho
 that certificate and has not been altered in transit. It does **not** prove the binary
 was built from the source in this repository. No signature can.
 
-From 0.2.0 the source is not public, so building it yourself is an option only if you
-have a source licence. That is a real reduction in what you can verify, and it is worth
-stating plainly rather than burying: what remains checkable from outside is the
-Developer ID signature, Apple's notarization, the published SHA-256, and the behaviour
-itself — Vaultkit's configuration all lives in files you own and can read (`~/.gitconfig`,
-`~/.ssh/known_hosts`, `diskutil` output), so its claims about your machine can be
-checked against your machine without reading its code.
+The source is public and GPL-licensed, so the strongest check available is the one you
+can run yourself: read it, then build it. Beyond that there is the Developer ID
+signature, Apple's notarization and the published SHA-256. Vaultkit's configuration also
+lives entirely in files you own and can read (`~/.gitconfig`, `~/.ssh/known_hosts`,
+`diskutil` output), so its claims about your machine can be checked against your machine
+directly.
 
 There is no auto-update channel. Vaultkit never checks for, downloads, or installs
-anything; a new version only ever arrives because you fetched it deliberately. The
-licence check is not an update check: it asks whether a subscription is current and is
-told yes or no, and no part of the app acts on a version number in that answer.
+anything; a new version only ever arrives because you fetched it deliberately.

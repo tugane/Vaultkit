@@ -30,13 +30,6 @@ final class AppStore: ObservableObject {
     @Published var activity: [ActivityItem] = []
     @Published var activityRunning = false
     @Published var activityCheckedAt: Date?
-    @Published var license: LicenseState = .unknown
-    /// Non-nil → the paywall is up, naming the feature that was reached for.
-    @Published var lockedFeature: Feature?
-    @Published var showActivation = false
-    /// A manual licence check is in flight (the only one the user can see).
-    @Published var licenseChecking = false
-    @Published var activating = false
     /// Act on critical hits the moment they are found. Warnings are never
     /// auto-actioned; a fix for those is a button.
     @Published var autoQuarantine = UserDefaults.standard.object(forKey: "vk.scanner.autoQuarantine") as? Bool ?? true {
@@ -113,16 +106,11 @@ final class AppStore: ObservableObject {
     let git = GitService()
     let keys = EnclaveKeyService()
     let gitConfig = GitConfigService()
-    let licenses: LicenseServing = LicenseService()
 
     init() {
         history = historyStore.load()
 
         // Settle the licence first. Everything gated reads `license`, and
-        // .unknown allows nothing, so the ordering here is load-bearing: a
-        // scan must not start on a lapsed licence and then be thrown away.
-        Task { await refreshLicense() }
-
         // Populate at launch regardless of which scene shows first: the
         // menu-bar extra must not depend on the main window ever opening.
         Task { await runDoctor() }
@@ -178,9 +166,6 @@ final class AppStore: ObservableObject {
             }
         }
 
-        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refreshLicense() }
-        }
     }
 
     /// Vaults whose data is readable right now, by any definition.
@@ -211,7 +196,6 @@ final class AppStore: ObservableObject {
     var flaggedActivity: Int { activity.filter { !$0.reasons.isEmpty }.count }
 
     func refreshActivity() async {
-        guard license.allows(.activity) else { activity = []; return }
         guard !activityRunning else { return }
         activityRunning = true
         let paths = organizations.filter { $0.vault == .mounted }
@@ -225,7 +209,6 @@ final class AppStore: ObservableObject {
     /// and re-read what was touched, so the list shows the state *after* the
     /// fixes. The history records what was found and what was done.
     func runScan(deep: Bool = false) async {
-        guard license.allows(.scanner) else { return }
         guard !scanRunning else { return }
         scanRunning = true
         let orgs = organizations
@@ -728,68 +711,11 @@ final class AppStore: ObservableObject {
     }
 
     func openClone(preferring org: Organization? = nil) {
-        guard require(.clone) else { return }
         cloneTarget = org ?? cloneableOrgs.first
     }
 
     func beginAddOrganization() {
-        guard require(.addOrganization) else { return }
         showAddOrg = true
-    }
-
-    // MARK: - Licensing
-    //
-    // The gate is drawn in Feature, and clause 6 of the EULA holds it there:
-    // mount, eject, relocate and remove are absent on purpose and stay
-    // available on a lapsed licence. Nobody's data sits behind our invoice.
-
-    /// True if the feature may run. Otherwise raises the paywall, naming it.
-    @discardableResult
-    func require(_ feature: Feature) -> Bool {
-        if license.allows(feature) { return true }
-        lockedFeature = feature
-        return false
-    }
-
-    /// Launch and once a day after: only actually reaches the network when the
-    /// cached entitlement says a re-check is due.
-    func refreshLicense(force: Bool = false) async {
-        let before = license
-        licenseChecking = force
-        defer { licenseChecking = false }
-        license = await licenses.refreshIfDue(force: force)
-
-        // A licence that just came back to life has a Scanner and an Activity
-        // view that have been idle. Catch them up rather than waiting out the
-        // five-minute timer.
-        if !before.isFull && license.isFull {
-            await runScan()
-            await refreshActivity()
-        }
-    }
-
-    func activate(key: String) async -> Bool {
-        activating = true
-        defer { activating = false }
-        do {
-            license = try await licenses.activate(key: key)
-            lastError = nil
-            if license.isFull {
-                lockedFeature = nil
-                showActivation = false
-                await runScan()
-                await refreshActivity()
-            }
-            return license.isFull
-        } catch {
-            lastError = error.localizedDescription
-            return false
-        }
-    }
-
-    func deactivateThisMac() async {
-        do { license = try await licenses.deactivate() }
-        catch { lastError = error.localizedDescription }
     }
 
     /// UC8: the reversible part first (git routing), then only what was asked
@@ -946,22 +872,14 @@ struct ContentView: View {
                 .background(p.sidebar)
             let page = store.selection ?? .dashboard
             VStack(spacing: 0) {
-                LicenseBanner()
                 Group {
                     switch page {
                     case .dashboard: DashboardView()
                     case .organizations: OrganizationsView()
                     case .vaults: VaultsView()
                     case .doctor: DoctorView()
-                    // Gated at the page, not inside it: the views below assume
-                    // their service has been running, and a licence that
-                    // lapsed mid-session leaves them with nothing to draw.
-                    case .scanner:
-                        if store.license.allows(.scanner) { ScannerView() }
-                        else { LockedPage(feature: .scanner) }
-                    case .activity:
-                        if store.license.allows(.activity) { ActivityView() }
-                        else { LockedPage(feature: .activity) }
+                    case .scanner: ScannerView()
+                    case .activity: ActivityView()
                     case .settings: SettingsView()
                     }
                 }
@@ -1009,10 +927,6 @@ struct ContentView: View {
             CloneSheet(org: org)
         }
         .sheet(isPresented: $store.showAddOrg) { AddOrgSheet() }
-        .sheet(item: $store.lockedFeature) { feature in
-            PaywallSheet(feature: feature)
-        }
-        .sheet(isPresented: $store.showActivation) { ActivationSheet() }
         .sheet(item: $store.removeTarget) { org in
             RemoveOrgSheet(org: org)
         }
@@ -1138,7 +1052,6 @@ struct SidebarView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(p.label3)
                     .lineSpacing(3)
-                LicenseFooter()
             }
             .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 18)
         }
@@ -1553,12 +1466,7 @@ struct MenuBarView: View {
             }
         }
         Divider()
-        if !store.license.allows(.scanner) {
-            Button(store.license.summary) {
-                store.showActivation = true
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        } else if store.compromiseIndicators > 0 {
+        if store.compromiseIndicators > 0 {
             Button("Scanner: \(plural(store.compromiseIndicators, "compromise indicator"))") {
                 store.selection = .scanner
                 NSApp.activate(ignoringOtherApps: true)
@@ -1567,9 +1475,7 @@ struct MenuBarView: View {
             Text(store.scanReport == nil ? "Scanner: no pass yet"
                  : "Scanner: clean · \(ScannerView.relative(store.scanReport!.finishedAt))")
         }
-        if store.license.allows(.scanner) {
-            Button("Scan Now") { Task { await store.runScan() } }
-        }
+        Button("Scan Now") { Task { await store.runScan() } }
         Divider()
         Button("Refresh") { Task { await store.refresh() } }
         Button("Open Vaultkit") { NSApp.activate(ignoringOtherApps: true) }

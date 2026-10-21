@@ -50,8 +50,6 @@ struct SettingsView: View {
                     SectionLabel("Appearance").padding(.top, 26).padding(.bottom, 10)
                     appearance
 
-                    SectionLabel("Licence").padding(.top, 26).padding(.bottom, 10)
-                    licence
                 }
                 .padding(.horizontal, 40)
                 .padding(.bottom, 32)
@@ -210,70 +208,6 @@ struct SettingsView: View {
             }
         }
         .padding(.top, 2)
-    }
-
-    // MARK: licence
-
-    @ViewBuilder
-    private var licence: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Field("Status") {
-                Text(store.license.summary)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .padding(.top, 1)
-            }
-
-            // The offline budget is the part that was invisible: a licence can
-            // lapse purely from not reaching the service, and until now the
-            // only warning was it going red.
-            if case .licensed(let entitlement) = store.license {
-                Field("Checked") {
-                    Text(offlineLine(entitlement))
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(p.label2)
-                        .padding(.top, 1)
-                }
-                Field("Renews") {
-                    Text(Self.day.string(from: entitlement.periodEnd))
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(p.label2)
-                        .padding(.top, 1)
-                }
-                Field("This Mac") {
-                    Text("\(MachineFingerprint.label) · one of \(plural(Licensing.seats, "seat"))")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(p.label2)
-                        .padding(.top, 1)
-                }
-            }
-
-            Field("") {
-                HStack(spacing: 8) {
-                    if store.licenseChecking {
-                        ProgressView().controlSize(.small).frame(height: 26)
-                    } else {
-                        PillButton(title: "Check Now", role: .neutral) {
-                            Task { await store.refreshLicense(force: true) }
-                        }
-                    }
-                    PillButton(title: store.license.isFull ? "Manage Licence" : "Enter a Licence Key",
-                               role: .neutral) { store.showActivation = true }
-                }
-            }
-        }
-    }
-
-    private static let day: DateFormatter = {
-        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; return f
-    }()
-
-    /// "Verified 3 days ago · works offline for another 18".
-    private func offlineLine(_ e: Entitlement) -> String {
-        let days = max(0, Calendar.current.dateComponents([.day], from: e.issuedAt, to: Date()).day ?? 0)
-        let left = max(0, Licensing.maxOfflineDays - days)
-        let verified = days == 0 ? "Verified today" : "Verified \(plural(days, "day")) ago"
-        return left == 0 ? "\(verified) · offline budget spent"
-                         : "\(verified) · works offline for another \(plural(left, "day"))"
     }
 
     // MARK: scanner exclusions

@@ -54,20 +54,6 @@ APP="release/Vaultkit.app"
 
 echo "==> releasing Vaultkit $VERSION"
 
-echo "==> licensing preflight"
-# A build carrying the placeholder public key would install and run, and then
-# reject every licence key anyone paid for: SignedEnvelope.open() cannot verify
-# a signature against 32 bytes that are not a key. Nothing downstream notices,
-# so it is checked here.
-if grep -q "REPLACE_ME_WITH_THE_BASE64_ED25519_PUBLIC_KEY" Sources/Vaultkit/Models/License.swift; then
-  echo "Licensing.signingPublicKey is still the placeholder." >&2
-  echo "Run 'npm run keygen' in server/ and paste the public half in." >&2
-  exit 1
-fi
-if grep -q "GNU GENERAL PUBLIC LICENSE" LICENSE; then
-  echo "LICENSE is the GPL again. Vaultkit ships commercially from 0.2.0." >&2
-  exit 1
-fi
 
 echo "==> tests"
 # The Swift Testing helper can fail to load an all-XCTest suite and take the
