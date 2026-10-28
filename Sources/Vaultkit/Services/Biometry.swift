@@ -20,7 +20,7 @@ enum BiometryObstacle: Equatable {
     var detail: String {
         switch self {
         case .lidClosed:
-            "The enclave key is biometry-gated and there is no passcode fallback, so this step needs a touch. Open the lid and it continues on its own."
+            "The enclave key is biometry-gated and there is no passcode fallback, so this step needs a touch. Open the lid and it continues on its own. To keep working with the lid down, use an external keyboard with Touch ID."
         case .noSensor(let reason):
             "\(reason) The enclave key is biometry-gated and there is no passcode fallback, so this step cannot proceed until a sensor can answer."
         }
@@ -31,7 +31,7 @@ enum BiometryObstacle: Equatable {
     var hint: String {
         switch self {
         case .lidClosed:
-            "The lid is closed, so Touch ID cannot answer. Open it before you start, or this will wait until you do."
+            "The lid is closed, so Touch ID cannot answer. Open it before you start, or use an external keyboard with Touch ID."
         case .noSensor(let reason):
             "Touch ID cannot answer: \(reason.prefix(1).lowercased() + reason.dropFirst())"
         }
