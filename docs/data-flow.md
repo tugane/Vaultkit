@@ -239,7 +239,11 @@ prevent. Distribution is direct, by notarized DMG.
    combination is also what an external Touch ID keyboard looks like, and the
    framework's answer in clamshell is undocumented, so that case offers an override
    rather than deciding. The enclave keys are `-t bio`, for which `sc_auth` has no
-   passcode alternative, so there is nothing to fall back to.
+   passcode alternative, so there is nothing to fall back to — and nothing that
+   should be: a key accepting a secret is permanently only as strong as that
+   secret, since an attacker need not wait for the lid to use the weaker door. So
+   the message names the fix that keeps the guarantee instead, an external keyboard
+   with Touch ID, which the preflight already detects and steps aside for.
 3. **Root-level vault dissenters** (indexing, AV) → invisible to user-level `lsof`; infer from empty-holder + lock failure, retry with backoff.
 4. **Hand-edited configs** → the parser must preserve unknown content byte-for-byte; if a file can't be parsed confidently, Vaultkit refuses to patch and explains, never guesses.
 5. **Forge quirks** → SSH on non-standard ports (Gitea built-in server), GitLab's signing-key re-add restriction, GitHub SSO authorize buttons: encoded per-forge, verified by the live auth test rather than assumed.

@@ -8,3 +8,5 @@ server/node_modules/
 server/.vercel/
 server/.env
 server/.env.local
+config.bat
+node_modules

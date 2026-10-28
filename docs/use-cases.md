@@ -29,13 +29,13 @@
 1. User enters: org name, display name, commit name/email, forge type (GitHub / GitLab / Gitea / custom), forge host.
 2. Vaultkit probes the forge (read-only): detects Gitea-style API, **detects non-standard SSH ports** (e.g. built-in Go SSH on 2222), fetches host-key fingerprints.
 3. Host-key verification: for known forges, compare against published fingerprints automatically; for custom forges, walk the user through out-of-band verification (console command to run on the server, second-network cross-check) before pinning.
-4. Create the Secure Enclave identity (`sc_auth create-ctk-identity … -t bio`): with a **clamshell-mode preflight**: detect lid-closed/Touch-ID-unavailable *before* attempting and tell the user to open the lid.
+4. Create the Secure Enclave identity (`sc_auth create-ctk-identity … -t bio`): with a **clamshell-mode preflight**: detect lid-closed/Touch-ID-unavailable *before* attempting, tell the user to open the lid, and name the external Touch ID keyboard for anyone who would rather not.
 5. Export the reference key into `~/.ssh` with a canonical name; show the public key with copy button and a **deep link to the exact forge page** to paste it (Settings → SSH keys, per forge type), including "delete keys from before your rebuild" guidance.
 6. Preview + apply config: `includeIf` block, per-org identity file, `core.sshCommand` with `IdentitiesOnly` and the enclave provider.
 7. **Verify live**: run the SSH auth test, show the forge's greeting ("Hi username!") as proof. Retry loop until the user finishes the browser step.
 
 **Alternate flows:**
-- 4a. Touch ID unavailable (clamshell/no sensor) → explain, watch for lid-open, resume automatically.
+- 4a. Touch ID unavailable (clamshell/no sensor) → explain, watch for lid-open, resume automatically. The explanation names the fix for someone who works clamshell by choice: an external keyboard with Touch ID, which keeps the hardware-presence guarantee with the lid down. A password fallback is not offered and should not be: `sc_auth` has no such protection (`-t bio|none`), and a key that accepts a secret is permanently only as strong as that secret, whatever the lid is doing.
 - 7a. Auth fails → diagnose: key not registered yet vs. wrong account vs. SSO authorization missing vs. wrong port; show the specific fix.
 
 **Postcondition:** a folder exists whose git operations use the right identity and key, verified end-to-end.

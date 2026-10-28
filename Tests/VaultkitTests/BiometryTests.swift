@@ -93,6 +93,16 @@ final class BiometryTests: XCTestCase {
         XCTAssertEqual(BiometryObstacle.lidClosed.headline, "The lid is closed")
     }
 
+    /// Opening the lid is the free answer; the keyboard is the one for someone
+    /// who works clamshell on purpose, and it keeps the hardware-presence
+    /// guarantee that a passcode fallback would trade away. Both places that
+    /// speak about the lid have to offer it, or the advice is only in the docs.
+    func testTheLidMessagesNameTheExternalKeyboard() {
+        for copy in [BiometryObstacle.lidClosed.detail, BiometryObstacle.lidClosed.hint] {
+            XCTAssertTrue(copy.contains("external keyboard with Touch ID"), copy)
+        }
+    }
+
     /// The framework's own sentence has to survive into the hint, otherwise
     /// "not enrolled" and "locked out" are indistinguishable to the user.
     func testTheSensorMessageCarriesTheFrameworksReason() {
