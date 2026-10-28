@@ -230,7 +230,16 @@ prevent. Distribution is direct, by notarized DMG.
 ## Failure modes the design must absorb
 
 1. **Cancelled system prompts** at any step → fail closed, state machine returns to the last safe state (I4).
-2. **Touch ID unavailable** (clamshell, external display) → detect via `AppleClamshellState` preflight, wait for change, resume.
+2. **Touch ID unavailable** (clamshell, external display) → preflight before
+   every step that raises a prompt, wait for change, resume. Two readings, because
+   neither is sufficient: `LAContext.canEvaluatePolicy` for whether biometry can be
+   evaluated at all (no sensor, nothing enrolled, locked out), and IORegistry's
+   `AppleClamshellState` for the lid. A shut lid blocks even when the framework
+   reports a usable sensor, since clamshell disables the built-in one — but that
+   combination is also what an external Touch ID keyboard looks like, and the
+   framework's answer in clamshell is undocumented, so that case offers an override
+   rather than deciding. The enclave keys are `-t bio`, for which `sc_auth` has no
+   passcode alternative, so there is nothing to fall back to.
 3. **Root-level vault dissenters** (indexing, AV) → invisible to user-level `lsof`; infer from empty-holder + lock failure, retry with backoff.
 4. **Hand-edited configs** → the parser must preserve unknown content byte-for-byte; if a file can't be parsed confidently, Vaultkit refuses to patch and explains, never guesses.
 5. **Forge quirks** → SSH on non-standard ports (Gitea built-in server), GitLab's signing-key re-add restriction, GitHub SSO authorize buttons: encoded per-forge, verified by the live auth test rather than assumed.

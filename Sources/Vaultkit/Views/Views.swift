@@ -30,6 +30,11 @@ final class AppStore: ObservableObject {
     @Published var activity: [ActivityItem] = []
     @Published var activityRunning = false
     @Published var activityCheckedAt: Date?
+    /// Non-nil → a step is holding for a sensor that cannot answer yet.
+    @Published var biometryWait: BiometryWait?
+    /// Last reading, for the sheets that warn before the user commits to a
+    /// step rather than after. Optimistic until something actually looks.
+    @Published var biometryStatus: BiometryStatus = .unknown
     /// Act on critical hits the moment they are found. Warnings are never
     /// auto-actioned; a fix for those is a button.
     @Published var autoQuarantine = UserDefaults.standard.object(forKey: "vk.scanner.autoQuarantine") as? Bool ?? true {
@@ -106,6 +111,9 @@ final class AppStore: ObservableObject {
     let git = GitService()
     let keys = EnclaveKeyService()
     let gitConfig = GitConfigService()
+    let biometry: any BiometryProbing = BiometryProbe()
+    /// Set by "continue anyway", read once by the wait loop.
+    private var biometryOverridden = false
 
     init() {
         history = historyStore.load()
@@ -580,6 +588,12 @@ final class AppStore: ObservableObject {
     func clone(url: String, into org: Organization) async -> Bool {
         busyOrgs.insert(org.name)
         defer { busyOrgs.remove(org.name) }
+        // Held here rather than inside git: ssh would raise the prompt, fail,
+        // and hand back a transport error that says nothing about the lid.
+        guard await awaitBiometry(for: "Cloning into \(org.displayName)") else {
+            lastError = "Stopped before cloning. Nothing was downloaded."
+            return false
+        }
         do {
             var target = org
             if target.vault == .unlocked {
@@ -663,6 +677,57 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Touch ID preflight
+
+    /// Take a reading so a sheet can warn before the user commits to a step,
+    /// rather than after a prompt has already failed.
+    func refreshBiometry() async {
+        biometryStatus = await biometry.status()
+    }
+
+    /// Hold a step that is about to raise a Touch ID prompt until the sensor
+    /// can answer it. Returns false when the user gave up waiting.
+    ///
+    /// Polling, not an IOKit notification: the lid would notify, but a Touch ID
+    /// keyboard being plugged in or a finger being enrolled would not, and one
+    /// `ioreg` a second is only spent while somebody is actually sitting here.
+    private func awaitBiometry(for action: String) async -> Bool {
+        biometryStatus = await biometry.status()
+        guard var obstacle = biometryStatus.obstacle else { return true }
+
+        biometryOverridden = false
+        biometryWait = BiometryWait(action: action, obstacle: obstacle,
+                                    overridable: biometryStatus.overridable)
+        defer { biometryWait = nil }
+
+        while biometryWait != nil {
+            try? await Task.sleep(for: .seconds(1))
+            if biometryOverridden { return true }
+            guard biometryWait != nil else { break }   // cancelled while we slept
+            biometryStatus = await biometry.status()
+            guard let next = biometryStatus.obstacle else { return true }
+            // The lid can open onto a second problem: no finger enrolled, or
+            // biometry locked out. Say what is wrong now, not what was.
+            if next != obstacle {
+                obstacle = next
+                biometryWait = BiometryWait(action: action, obstacle: next,
+                                            overridable: biometryStatus.overridable)
+            }
+        }
+        return false
+    }
+
+    /// The user has an external Touch ID keyboard the lid check cannot see.
+    /// Clears the banner on the click rather than on the next tick; the loop
+    /// reads the flag before it looks at the banner, so this cannot be
+    /// mistaken for a cancel.
+    func overrideBiometryWait() {
+        biometryOverridden = true
+        biometryWait = nil
+    }
+
+    func cancelBiometryWait() { biometryWait = nil }
+
     /// UC1/UC4 end to end: enclave key → encrypted vault → git routing.
     /// Every step is verified before the next runs, and a failure leaves the
     /// machine no less protected than it started (I4).
@@ -683,6 +748,15 @@ final class AppStore: ObservableObject {
             return false
         }
         do {
+            // Both the create and the export raise a prompt. Preflight once:
+            // the lid that is open for the first is open for the second.
+            creatingOrg = "Checking the Touch ID sensor"
+            guard await awaitBiometry(for: "Creating the \(displayName) key") else {
+                creatingOrg = nil
+                lastError = "Stopped before the Secure Enclave key was created. Nothing on this Mac was changed."
+                return false
+            }
+
             creatingOrg = "Creating the Secure Enclave key. Touch the sensor"
             if await !keys.labels().contains(org.keyLabel) {
                 try await keys.createIdentity(label: org.keyLabel)
@@ -1225,6 +1299,81 @@ struct VaultRow: View {
 
 // MARK: - Sheets
 
+/// The Touch ID preflight, rendered in place of the step it is holding back.
+/// The step resumes on its own; both buttons here are ways to stop waiting.
+///
+/// Takes its two actions rather than reaching for the store, so it can be put
+/// on screen with nothing behind it.
+struct BiometryWaitBanner: View {
+    @Environment(\.palette) private var p
+    let wait: BiometryWait
+    let onStop: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: wait.obstacle.symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(p.amber)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(wait.obstacle.headline)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(p.amberText)
+                    Text(wait.obstacle.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(p.label3)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                // One line whatever the org is called: the buttons keep their
+                // place rather than being pushed about by a long name.
+                Text(wait.action)
+                    .font(.system(size: 12))
+                    .foregroundStyle(p.label3)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                PillButton(title: "Stop Waiting", role: .neutral, height: 26, hpad: 12,
+                           radius: 7, font: .system(size: 12, weight: .medium), action: onStop)
+                // Only where LocalAuthentication says some sensor is reachable:
+                // with the lid down that means an external Touch ID keyboard,
+                // which the lid check has no way to see.
+                if wait.overridable {
+                    PillButton(title: "Continue Anyway", role: .accent, height: 26, hpad: 12,
+                               radius: 7, font: .system(size: 12, weight: .semibold), action: onContinue)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(p.well))
+    }
+}
+
+/// The same reading, one line, before the user commits to anything.
+struct BiometryHint: View {
+    @Environment(\.palette) private var p
+    let obstacle: BiometryObstacle
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: obstacle.symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(p.amber)
+                .padding(.top, 1)
+            Text(obstacle.hint)
+                .font(.system(size: 12.5))
+                .foregroundStyle(p.amberText)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct MountSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -1318,6 +1467,9 @@ struct CloneSheet: View {
                     .font(.system(size: 12.5))
                     .foregroundStyle(p.label2)
             }
+            if store.biometryWait == nil, let obstacle = store.biometryStatus.obstacle {
+                BiometryHint(obstacle: obstacle)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 FieldLabel("Repository")
                 TextField("git@host:org/repo.git", text: $url)
@@ -1336,6 +1488,11 @@ struct CloneSheet: View {
                 }
                 .foregroundStyle(pinned ? p.greenText : p.redText)
             }
+            if let wait = store.biometryWait {
+                BiometryWaitBanner(wait: wait,
+                                   onStop: { store.cancelBiometryWait() },
+                                   onContinue: { store.overrideBiometryWait() })
+            }
             HStack(spacing: 10) {
                 Spacer()
                 PillButton(title: "Cancel", role: .neutral, height: 32, hpad: 18,
@@ -1350,6 +1507,10 @@ struct CloneSheet: View {
         .frame(width: 480)
         .background(p.sheet)
         .onAppear { selectedName = org.name }
+        .task { await store.refreshBiometry() }
+        // Closing the sheet abandons the clone, rather than leaving the wait
+        // loop to start one once the lid opens.
+        .onDisappear { store.cancelBiometryWait() }
     }
 
     private func submit() {
