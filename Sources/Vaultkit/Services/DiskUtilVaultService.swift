@@ -3,7 +3,7 @@ import Foundation
 enum VaultError: LocalizedError {
     case volumeNotFound(String)
     case unlockFailed(String)
-    case busy(holders: [String])
+    case busy(holders: [VaultHolder])
     case commandFailed(String)
 
     var errorDescription: String? {
@@ -15,11 +15,27 @@ enum VaultError: LocalizedError {
         case .busy(let holders):
             holders.isEmpty
                 ? "The vault is busy, likely Spotlight indexing or an antivirus scan (root processes). It usually frees up within a minute."
-                : "The vault is held open by: \(holders.joined(separator: ", ")). Close them (or cd out) and retry."
+                : "The vault is held open by: \(holders.map(\.label).joined(separator: ", "))."
         case .commandFailed(let detail):
             detail
         }
     }
+}
+
+/// A process keeping a vault mounted. lsof truncates command names to nine
+/// characters unless told otherwise, which turned Docker's helper into
+/// "com.docke", so the full name is asked for and kept.
+struct VaultHolder: Equatable, Identifiable, Sendable {
+    var pid: Int32
+    var command: String
+    var user: String
+    /// Owned by whoever is running this app. Anything else (root's Spotlight,
+    /// an antivirus) can only be stopped by its owner, so it is named and
+    /// never signalled.
+    var isMine: Bool
+
+    var id: Int32 { pid }
+    var label: String { "\(command) (pid \(pid))" }
 }
 
 /// Real VaultServing backed by `diskutil apfs`, encoding the behaviors proven
@@ -314,23 +330,63 @@ final class DiskUtilVaultService: VaultServing, @unchecked Sendable {
         }
     }
 
-    func dissenters(for org: Organization) async throws -> [String] {
+    func dissenters(for org: Organization) async throws -> [VaultHolder] {
         let path = (try? await volume(for: org))?.mountPoint ?? expand(org.folderPath)
         return await holders(at: path)
     }
 
-    private func holders(at path: String) async -> [String] {
+    func holders(at path: String) async -> [VaultHolder] {
         // lsof exits non-zero when it finds nothing; parse whatever came back.
-        guard let r = try? await runner.run("/usr/sbin/lsof", [path]) else { return [] }
-        return r.stdout
-            .split(separator: "\n")
-            .dropFirst() // header
-            .compactMap { line -> String? in
-                let cols = line.split(separator: " ", omittingEmptySubsequences: true)
-                guard cols.count >= 2 else { return nil }
-                return "\(cols[0]) (pid \(cols[1]))"
+        // +c 0 keeps full command names, and -F prints one field per line, so
+        // a command containing spaces cannot be split into the wrong columns.
+        guard let r = try? await runner.run("/usr/sbin/lsof", ["+c", "0", "-F", "pcLu", path])
+        else { return [] }
+        return Self.parseHolders(r.stdout)
+    }
+
+    /// lsof -F output: one field per line, the first character naming it.
+    /// A "p" line starts a new process, so it flushes the previous one.
+    static func parseHolders(_ text: String, currentUID: uid_t = getuid()) -> [VaultHolder] {
+        var out: [VaultHolder] = []
+        var pid: Int32?
+        var command = ""
+        var user = ""
+        var uid: uid_t?
+        func flush() {
+            guard let pid, !out.contains(where: { $0.pid == pid }) else { return }
+            out.append(VaultHolder(pid: pid, command: command.isEmpty ? "unknown" : command,
+                                   user: user, isMine: uid == currentUID))
+        }
+        for line in text.split(separator: "\n") {
+            guard let tag = line.first else { continue }
+            let value = String(line.dropFirst())
+            switch tag {
+            case "p": flush(); pid = Int32(value); command = ""; user = ""; uid = nil
+            case "c": command = value
+            case "L": user = value
+            case "u": uid = uid_t(value)
+            default: break
             }
-            .reduce(into: [String]()) { acc, item in if !acc.contains(item) { acc.append(item) } }
+        }
+        flush()
+        return out
+    }
+
+    /// Which holders this app may signal at all. Its own process must never be
+    /// on the list: it would take the app down in the middle of an eject.
+    static func signalable(_ holders: [VaultHolder], selfPID: Int32 = getpid()) -> [VaultHolder] {
+        holders.filter { $0.isMine && $0.pid > 1 && $0.pid != selfPID }
+    }
+
+    /// Ask the holders to quit, returning the ones actually signalled.
+    /// SIGTERM by default: a process that is asked gets to flush its buffers
+    /// and save. SIGKILL can do neither, so forcing is a separate decision
+    /// taken above this line, never an automatic escalation.
+    @discardableResult
+    func askToQuit(_ holders: [VaultHolder], force: Bool = false) -> [VaultHolder] {
+        let targets = Self.signalable(holders)
+        for holder in targets { kill(holder.pid, force ? SIGKILL : SIGTERM) }
+        return targets
     }
 
     // MARK: placeholder guard

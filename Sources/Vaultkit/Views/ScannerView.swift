@@ -118,7 +118,7 @@ struct ScannerView: View {
 
     @ViewBuilder
     private var quarantineList: some View {
-        Text("Quarantine lives inside each vault at .vaultkit/quarantine, so held bytes stay encrypted at rest and never leave the organization. Originals are purged automatically \(plural(Int(AppStore.quarantineTTL / 60), "minute")) after they are set aside. Restore inside that window is the only way to get a file back. A locked vault's quarantine is untouched until it is mounted again.")
+        Text("Quarantine lives inside each vault at .vaultkit/quarantine, so held bytes stay encrypted at rest and never leave the organization. Originals are purged automatically \(QuarantineHold.label(store.quarantineHold)) after they are set aside. Restore inside that window is the only way to get a file back. A locked vault's quarantine is untouched until it is mounted again.")
             .font(.system(size: 12.5))
             .foregroundStyle(p.label2)
             .lineSpacing(3)
@@ -131,6 +131,7 @@ struct ScannerView: View {
         } else {
             ForEach(store.quarantine) { item in
                 QuarantineRow(item: item,
+                              hold: store.quarantineHold,
                               restore: { store.restore(item) },
                               purge: { store.purge(item) })
             }
@@ -352,15 +353,18 @@ struct ScanFindingRow: View {
 struct QuarantineRow: View {
     @Environment(\.palette) private var p
     let item: QuarantineItem
+    let hold: TimeInterval
     let restore: () -> Void
     let purge: () -> Void
 
     /// How long is left to restore this. Recomputed on every store refresh.
     private var expiry: String {
-        let left = Int(AppStore.quarantineTTL - Date().timeIntervalSince(item.date))
+        let left = Int(hold - Date().timeIntervalSince(item.date))
         if left <= 0 { return "purging now" }
         if left < 60 { return "purges in \(left)s. Restore now or it is gone" }
-        return "purges in \(plural(left / 60 + 1, "minute"))"
+        if left < 3600 { return "purges in \(plural(left / 60 + 1, "minute"))" }
+        if left < 86_400 { return "purges in \(plural(left / 3600 + 1, "hour"))" }
+        return "purges in \(plural(left / 86_400 + 1, "day"))"
     }
 
     var body: some View {
