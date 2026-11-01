@@ -10,6 +10,7 @@ final class AppStore: ObservableObject {
     @Published var findings: [DoctorFinding] = []
     @Published var selection: SidebarItem? = .dashboard
     @Published var lastError: String?
+    @Published var ejectBlocked: EjectBlock?     // non-nil → the holders alert is up
     @Published var mountTarget: Organization?    // non-nil → passphrase sheet is up
     @Published var cloneTarget: Organization?    // non-nil → clone sheet is up
     @Published var busyOrgs: Set<String> = []    // orgs with an action in flight
@@ -29,22 +30,75 @@ final class AppStore: ObservableObject {
     @Published var activity: [ActivityItem] = []
     @Published var activityRunning = false
     @Published var activityCheckedAt: Date?
-    @Published var license: LicenseState = .unknown
-    /// Non-nil → the paywall is up, naming the feature that was reached for.
-    @Published var lockedFeature: Feature?
-    @Published var showActivation = false
-    @Published var activating = false
+    /// Non-nil → a step is holding for a sensor that cannot answer yet.
+    @Published var biometryWait: BiometryWait?
+    /// Last reading, for the sheets that warn before the user commits to a
+    /// step rather than after. Optimistic until something actually looks.
+    @Published var biometryStatus: BiometryStatus = .unknown
     /// Act on critical hits the moment they are found. Warnings are never
     /// auto-actioned; a fix for those is a button.
     @Published var autoQuarantine = UserDefaults.standard.object(forKey: "vk.scanner.autoQuarantine") as? Bool ?? true {
         didSet { UserDefaults.standard.set(autoQuarantine, forKey: "vk.scanner.autoQuarantine") }
     }
 
+    /// Refuse history rewriting inside the vaults. On by default: signing every
+    /// commit buys nothing if a commit can afterwards be quietly replaced, and
+    /// replacing one is how the campaign this app was built after moved. It is
+    /// a setting because rebasing your own work is legitimate, and the person
+    /// who wants that should be able to say so and be told what it costs.
+    @Published var blockRewrites = UserDefaults.standard.object(forKey: RewriteGuard.defaultsKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(blockRewrites, forKey: RewriteGuard.defaultsKey)
+            applyRewriteGuard()
+        }
+    }
+    /// Organizations left out of the rewrite guard, by name.
+    @Published var rewriteExempt = RewriteGuard.exempt() {
+        didSet {
+            RewriteGuard.setExempt(rewriteExempt)
+            applyRewriteGuard()
+        }
+    }
+    /// Refusals the hook recorded, newest first.
+    @Published var rewriteAttempts: [RewriteAttempt] = []
+    /// Repositories the guard could not take, because another tool's hook of
+    /// the same name is already there. Never overwritten, always reported.
+    @Published var unguardedRepos: [String] = []
+
+    /// When vaults close on their own. Changing it rewrites the stored policy;
+    /// nothing else needs to react, because every trigger reads it fresh.
+    @Published var autoSecure = AutoSecurePolicy.load() {
+        didSet { autoSecure.save() }
+    }
+    /// How long a quarantined original is held before it is purged for good.
+    /// Restore is only possible inside this window.
+    @Published var quarantineHold = QuarantineHold.load() {
+        didSet { QuarantineHold.save(quarantineHold) }
+    }
+    /// Which events are worth interrupting someone for.
+    @Published var notifications = NotificationPolicy.load() {
+        didSet { notifications.save() }
+    }
+    /// Recent automatic attempts, newest first. Capped: this is a record to
+    /// glance at, not a log.
+    @Published var autoSecureEvents: [AutoSecureEvent] = []
+    /// One sweep at a time. The idle check runs on the ten-second refresh, and
+    /// an eject can take longer than that.
+    @Published private(set) var autoSecuring = false
+
+    /// Set while the machine has been idle past the threshold, cleared when the
+    /// user comes back. Without it the sweep would retry every ten seconds all
+    /// night against a vault something is holding.
+    private var idleFired = false
+    /// org.name → when we last said out loud that it was held, so a vault open
+    /// all afternoon does not notify every ten seconds.
+    private var heldNotifiedAt: [String: Date] = [:]
+    private static let heldNotifyInterval: TimeInterval = 1800
+
     /// How often mounted vaults are re-checked for changed files.
     static let scanInterval: TimeInterval = 300
     /// How long a quarantined original is held before it is purged for good.
     /// Restore is only possible inside this window.
-    static let quarantineTTL: TimeInterval = 600
     private var mountedNames: Set<String> = []
 
     let vaults = DiskUtilVaultService()
@@ -53,19 +107,18 @@ final class AppStore: ObservableObject {
     let activityService = ActivityService()
     let historyStore = HistoryStore()
     let doctor = DoctorService()
+    let rewriteGuard = RewriteGuard()
     let git = GitService()
     let keys = EnclaveKeyService()
     let gitConfig = GitConfigService()
-    let licenses: LicenseServing = LicenseService()
+    let biometry: any BiometryProbing = BiometryProbe()
+    /// Set by "continue anyway", read once by the wait loop.
+    private var biometryOverridden = false
 
     init() {
         history = historyStore.load()
 
         // Settle the licence first. Everything gated reads `license`, and
-        // .unknown allows nothing, so the ordering here is load-bearing: a
-        // scan must not start on a lapsed licence and then be thrown away.
-        Task { await refreshLicense() }
-
         // Populate at launch regardless of which scene shows first: the
         // menu-bar extra must not depend on the main window ever opening.
         Task { await runDoctor() }
@@ -79,6 +132,28 @@ final class AppStore: ObservableObject {
                 Task { @MainActor in await self?.refresh() }
             }
         }
+
+        // Auto-secure's three ambient triggers. The fourth, quit, is the app
+        // delegate's: it has to hold termination open while the sweep runs.
+        //
+        // Sleep is best effort by construction. macOS does not wait for us, one
+        // eject can take longer than the grace it gives, and blocking sleep to
+        // finish would be a worse bargain than leaving the vault for the idle
+        // check to pick up on wake.
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.autoSecureSweep(trigger: .sleep) }
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.refresh() }
+        }
+        // Screen lock has no deadline and maps to the moment someone walks
+        // away, which makes it the most useful of the three.
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.autoSecureSweep(trigger: .screenLock) }
+        }
+        AutoSecureTermination.store = self
 
         // NSWorkspace only notices /Volumes-scope mounts: canonical-path mounts
         // (diskutil -mountpoint ~/work/<org>, i.e. work-on and our own) bypass
@@ -99,9 +174,6 @@ final class AppStore: ObservableObject {
             }
         }
 
-        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refreshLicense() }
-        }
     }
 
     /// Vaults whose data is readable right now, by any definition.
@@ -132,7 +204,6 @@ final class AppStore: ObservableObject {
     var flaggedActivity: Int { activity.filter { !$0.reasons.isEmpty }.count }
 
     func refreshActivity() async {
-        guard license.allows(.activity) else { activity = []; return }
         guard !activityRunning else { return }
         activityRunning = true
         let paths = organizations.filter { $0.vault == .mounted }
@@ -146,7 +217,6 @@ final class AppStore: ObservableObject {
     /// and re-read what was touched, so the list shows the state *after* the
     /// fixes. The history records what was found and what was done.
     func runScan(deep: Bool = false) async {
-        guard license.allows(.scanner) else { return }
         guard !scanRunning else { return }
         scanRunning = true
         let orgs = organizations
@@ -172,13 +242,20 @@ final class AppStore: ObservableObject {
         historyStore.save(history)
         reloadQuarantine()
 
-        if !found.isEmpty {
-            let neutralized = actions.filter { $0.kind == .cleaned || $0.kind == .quarantined }.count
+        // Acting on something is always news. A finding that is merely still
+        // there is not: this used to fire on every pass, so one hit nobody
+        // could fix announced itself every five minutes until it was fixed or
+        // the app was quit.
+        let neutralized = actions.filter { $0.kind == .cleaned || $0.kind == .quarantined }.count
+        if notifications.scannerHits, neutralized > 0 || NotificationPolicy.isNew(found) {
             notify(title: neutralized > 0
                        ? "Vaultkit neutralized \(plural(neutralized, "PolinRider hit"))"
                        : "Vaultkit found \(plural(found.count, "PolinRider indicator"))",
                    body: found.prefix(3).map { "\($0.repo): \($0.path)" }.joined(separator: "\n"))
         }
+        // Recorded whatever the switch says, so turning notifications back on
+        // does not replay everything that was found while they were off.
+        NotificationPolicy.remember(found)
         nextScanAt = Date().addingTimeInterval(Self.scanInterval)
         scanRunning = false
     }
@@ -257,6 +334,138 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: history-rewrite guard
+
+    /// Bring every mounted vault into line with the setting. Idempotent, so it
+    /// can run on any mount change without keeping track of what it did last.
+    func applyRewriteGuard() {
+        let guarded = blockRewrites ? organizations.filter { !rewriteExempt.contains($0.name) } : []
+        let unguarded = organizations.filter { org in !guarded.contains { $0.name == org.name } }
+        // Turning the guard off, or exempting an org, has to take the hook back
+        // out: leaving it behind would keep refusing rewrites with nothing in
+        // the UI to explain why.
+        rewriteGuard.uninstall(from: unguarded)
+        unguardedRepos = rewriteGuard.install(in: guarded).conflicted
+    }
+
+    /// Notify once per refusal. The journal is the record; this is the part
+    /// that makes it an alarm rather than a log nobody opens.
+    func readRewriteAttempts() {
+        rewriteAttempts = rewriteGuard.attempts()
+        let seen = UserDefaults.standard.object(forKey: "vk.rewriteAttemptSeen") as? Date ?? .distantPast
+        let fresh = rewriteAttempts.filter { $0.at > seen }
+        guard let newest = fresh.first else { return }
+        UserDefaults.standard.set(newest.at, forKey: "vk.rewriteAttemptSeen")
+        guard notifications.rewriteRefusals else { return }
+
+        let repos = Set(fresh.map(\.repo)).sorted().joined(separator: ", ")
+        notify(title: fresh.count == 1 ? "History rewrite refused" : "\(fresh.count) history rewrites refused",
+               body: "In \(repos). Replacing a commit that is already signed is how an altered one is made to look ordinary. Nothing was changed.")
+    }
+
+    // MARK: auto-secure
+
+    /// Polled from refresh, so no timer of its own. Arms on the way past the
+    /// threshold and disarms when the user comes back, which is what keeps a
+    /// held vault from being retried every ten seconds all night.
+    func checkIdle() async {
+        guard autoSecure.allows(.idle) else { idleFired = false; return }
+        guard SystemIdle.seconds() >= TimeInterval(autoSecure.idleMinutes * 60) else {
+            idleFired = false
+            return
+        }
+        guard !idleFired else { return }
+        idleFired = true
+        await autoSecureSweep(trigger: .idle)
+    }
+
+    var hasVaultsToSecureOnQuit: Bool {
+        !autoSecure.targets(for: .quit, idleSeconds: 0, exposed: exposedOrgs, busy: busyOrgs).isEmpty
+    }
+
+    /// Put every vault this trigger covers back to rest. Never writes
+    /// `lastError`: this runs unattended, and a modal alert raised by a timer
+    /// is something you cannot work through.
+    func autoSecureSweep(trigger: SecureTrigger) async {
+        guard !autoSecuring else { return }
+        let targets = autoSecure.targets(for: trigger, idleSeconds: SystemIdle.seconds(),
+                                         exposed: exposedOrgs, busy: busyOrgs)
+        guard !targets.isEmpty else { return }
+
+        autoSecuring = true
+        defer { autoSecuring = false }
+        announceAutoSecureOnce()
+
+        var secured: [Organization] = []
+        var held: [(org: Organization, holders: [String])] = []
+        for org in targets {
+            let outcome = await autoEject(org)
+            autoSecureEvents.insert(
+                AutoSecureEvent(at: Date(), org: org.name, trigger: trigger, outcome: outcome), at: 0)
+            switch outcome {
+            case .secured: secured.append(org)
+            case .held(let holders): held.append((org, holders))
+            case .failed: break
+            }
+        }
+        autoSecureEvents = Array(autoSecureEvents.prefix(50))
+        await refresh()
+        report(secured: secured, held: held, trigger: trigger)
+    }
+
+    /// The automatic path's eject. Same work as `eject`, but the failure comes
+    /// back as a value, and a volume that is busy is asked who is holding it
+    /// rather than reduced to a sentence.
+    private func autoEject(_ org: Organization) async -> AutoSecureOutcome {
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
+        do {
+            try await vaults.eject(org)
+            return .secured
+        } catch let error as VaultError {
+            guard case .busy(let holders) = error else { return .failed(error.localizedDescription) }
+            // lsof only reliably names this user's own processes, so an empty
+            // list means something root-owned. Ask again rather than say
+            // nothing useful.
+            let named = holders.isEmpty ? ((try? await vaults.dissenters(for: org)) ?? []) : holders
+            return .held(named.map(\.label))
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func report(secured: [Organization], held: [(org: Organization, holders: [String])],
+                        trigger: SecureTrigger) {
+        guard notifications.autoSecure else { return }
+        if !secured.isEmpty {
+            notify(title: "\(plural(secured.count, "vault")) secured",
+                   body: "\(secured.map(\.displayName).joined(separator: ", ")) went back to rest because \(trigger.label).")
+        }
+
+        // A vault held open all afternoon is worth saying once, not 170 times.
+        let now = Date()
+        let due = held.filter { now.timeIntervalSince(heldNotifiedAt[$0.org.name] ?? .distantPast) >= Self.heldNotifyInterval }
+        guard !due.isEmpty else { return }
+        for entry in due { heldNotifiedAt[entry.org.name] = now }
+
+        let names = due.map(\.org.displayName).joined(separator: ", ")
+        let holders = Array(Set(due.flatMap(\.holders))).sorted()
+        notify(title: "\(plural(due.count, "vault")) could not be secured",
+               body: holders.isEmpty
+                   ? "\(names) is still in use, so it stays mounted. Vaultkit will try again when the Mac next goes idle."
+                   : "\(names) is held by \(holders.prefix(3).joined(separator: ", ")). It stays mounted until they let go.")
+    }
+
+    /// An install that updates into this gets a Mac that starts closing its own
+    /// vaults. Say so once, rather than let it be discovered as an unexplained
+    /// passphrase prompt.
+    private func announceAutoSecureOnce() {
+        guard AutoSecurePolicy.needsAnnouncing() else { return }
+        AutoSecurePolicy.markAnnounced()
+        notify(title: "Vaultkit now secures vaults on its own",
+               body: "Vaults go back to rest after \(plural(autoSecure.idleMinutes, "minute")) idle, and on screen lock, sleep and quit. Settings has the switch.")
+    }
+
     func runDoctor() async {
         doctorRunning = true
         await refresh()
@@ -283,7 +492,16 @@ final class AppStore: ObservableObject {
         if nowMounted != mountedNames {
             mountedNames = nowMounted
             Task { await runScan() }
+            // A vault's repositories only exist while it is mounted, and a
+            // repository cloned since the last mount has no hook yet.
+            applyRewriteGuard()
         }
+
+        // Cheap: one small file. Worth doing on the ten-second tick rather than
+        // the scan cadence, because an alarm five minutes late is not an alarm.
+        readRewriteAttempts()
+
+        await checkIdle()
 
         // Runs on the 10-second refresh rather than the scan tick, so the hold
         // time is honoured to the second and the countdown in the UI ticks.
@@ -314,19 +532,37 @@ final class AppStore: ObservableObject {
         historyStore.save(history)
     }
 
+    /// Change what an organization's scans skip. The Scanner has to forget what
+    /// it knows about that org first: its incremental pass only re-reads files
+    /// whose timestamps moved, so an un-excluded directory would stay unscanned
+    /// until something in it happened to change.
+    func setScanExclusions(_ paths: [String], for org: Organization) async {
+        ScanExclusions.save(paths, for: org.name)
+        await scanner.invalidate(org.name)
+        await refresh()
+        await runScan()
+    }
+
+    /// Quarantined originals a given hold time would purge immediately. The
+    /// UI asks before shortening past anything still restorable, because the
+    /// purge cannot be undone.
+    func quarantineAtRisk(under hold: TimeInterval) -> Int {
+        QuarantineService.expired(quarantine, now: Date(), ttl: hold).count
+    }
+
     /// Purge quarantined originals past their hold time. Only reaches mounted
     /// vaults. Items in a locked vault are ciphertext and simply wait for the
     /// next mount, which is the correct outcome either way.
     func sweepQuarantine() {
-        let due = QuarantineService.expired(quarantine, now: Date(), ttl: Self.quarantineTTL)
+        let due = QuarantineService.expired(quarantine, now: Date(), ttl: quarantineHold)
         guard !due.isEmpty else { return }
-        let minutes = Int(Self.quarantineTTL / 60)
+        let held = QuarantineHold.label(quarantineHold)
         for item in due {
             guard let org = organizations.first(where: { $0.name == item.orgName }) else { continue }
             let root = (org.folderPath as NSString).expandingTildeInPath
             guard let event = try? quarantineService.purge(
                 item, vaultRoot: root,
-                detail: "Purged automatically \(plural(minutes, "minute")) after quarantine.") else { continue }
+                detail: "Purged automatically \(held) after quarantine.") else { continue }
             history.actions.insert(event, at: 0)
         }
         historyStore.save(history)
@@ -338,13 +574,13 @@ final class AppStore: ObservableObject {
     /// Falls back to the sheet if the keys drop mid-way.
     func relocate(_ org: Organization) async {
         busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.mount(org, passphrase: "")
         } catch {
             mountTarget = org
         }
         await runDoctor()
-        busyOrgs.remove(org.name)
     }
 
     /// Clone into the org's vault with the org's key (Touch ID prompt),
@@ -352,6 +588,12 @@ final class AppStore: ObservableObject {
     func clone(url: String, into org: Organization) async -> Bool {
         busyOrgs.insert(org.name)
         defer { busyOrgs.remove(org.name) }
+        // Held here rather than inside git: ssh would raise the prompt, fail,
+        // and hand back a transport error that says nothing about the lid.
+        guard await awaitBiometry(for: "Cloning into \(org.displayName)") else {
+            lastError = "Stopped before cloning. Nothing was downloaded."
+            return false
+        }
         do {
             var target = org
             if target.vault == .unlocked {
@@ -371,24 +613,61 @@ final class AppStore: ObservableObject {
 
     func mount(_ org: Organization, passphrase: String) async {
         busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.mount(org, passphrase: passphrase)
         } catch {
             lastError = error.localizedDescription
         }
         await runDoctor()   // mutations refresh findings too
-        busyOrgs.remove(org.name)
     }
 
     func eject(_ org: Organization) async {
         busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
         do {
             try await vaults.eject(org)
+        } catch let error as VaultError {
+            // Named holders are answerable: offer to close them rather than
+            // leave a list of pids and an OK button.
+            if case .busy(let holders) = error, !holders.isEmpty {
+                ejectBlocked = EjectBlock(org: org, holders: holders)
+            } else {
+                lastError = error.localizedDescription
+            }
         } catch {
             lastError = error.localizedDescription
         }
         await runDoctor()
-        busyOrgs.remove(org.name)
+    }
+
+    /// Ask what is holding the vault to quit, then eject. The holders are
+    /// re-read rather than assumed gone: a process that ignores SIGTERM must
+    /// be reported, not silently forced.
+    func closeHoldersAndEject(_ block: EjectBlock, force: Bool) async {
+        let org = block.org
+        ejectBlocked = nil
+        busyOrgs.insert(org.name)
+        defer { busyOrgs.remove(org.name) }
+
+        let asked = vaults.askToQuit(block.holders, force: force)
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if ((try? await vaults.dissenters(for: org)) ?? []).isEmpty { break }
+        }
+        do {
+            try await vaults.eject(org)
+            lastError = "Closed \(plural(asked.count, "process", "processes")) and secured \(org.displayName)."
+        } catch let error as VaultError {
+            if case .busy(let holders) = error, !holders.isEmpty {
+                ejectBlocked = EjectBlock(org: org, holders: holders, wereAsked: true)
+            } else {
+                lastError = error.localizedDescription
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
+        await runDoctor()
     }
 
     /// Put every exposed vault at rest (mounted, unlocked, or misplaced).
@@ -397,6 +676,57 @@ final class AppStore: ObservableObject {
             await eject(org)
         }
     }
+
+    // MARK: - Touch ID preflight
+
+    /// Take a reading so a sheet can warn before the user commits to a step,
+    /// rather than after a prompt has already failed.
+    func refreshBiometry() async {
+        biometryStatus = await biometry.status()
+    }
+
+    /// Hold a step that is about to raise a Touch ID prompt until the sensor
+    /// can answer it. Returns false when the user gave up waiting.
+    ///
+    /// Polling, not an IOKit notification: the lid would notify, but a Touch ID
+    /// keyboard being plugged in or a finger being enrolled would not, and one
+    /// `ioreg` a second is only spent while somebody is actually sitting here.
+    private func awaitBiometry(for action: String) async -> Bool {
+        biometryStatus = await biometry.status()
+        guard var obstacle = biometryStatus.obstacle else { return true }
+
+        biometryOverridden = false
+        biometryWait = BiometryWait(action: action, obstacle: obstacle,
+                                    overridable: biometryStatus.overridable)
+        defer { biometryWait = nil }
+
+        while biometryWait != nil {
+            try? await Task.sleep(for: .seconds(1))
+            if biometryOverridden { return true }
+            guard biometryWait != nil else { break }   // cancelled while we slept
+            biometryStatus = await biometry.status()
+            guard let next = biometryStatus.obstacle else { return true }
+            // The lid can open onto a second problem: no finger enrolled, or
+            // biometry locked out. Say what is wrong now, not what was.
+            if next != obstacle {
+                obstacle = next
+                biometryWait = BiometryWait(action: action, obstacle: next,
+                                            overridable: biometryStatus.overridable)
+            }
+        }
+        return false
+    }
+
+    /// The user has an external Touch ID keyboard the lid check cannot see.
+    /// Clears the banner on the click rather than on the next tick; the loop
+    /// reads the flag before it looks at the banner, so this cannot be
+    /// mistaken for a cancel.
+    func overrideBiometryWait() {
+        biometryOverridden = true
+        biometryWait = nil
+    }
+
+    func cancelBiometryWait() { biometryWait = nil }
 
     /// UC1/UC4 end to end: enclave key → encrypted vault → git routing.
     /// Every step is verified before the next runs, and a failure leaves the
@@ -418,6 +748,15 @@ final class AppStore: ObservableObject {
             return false
         }
         do {
+            // Both the create and the export raise a prompt. Preflight once:
+            // the lid that is open for the first is open for the second.
+            creatingOrg = "Checking the Touch ID sensor"
+            guard await awaitBiometry(for: "Creating the \(displayName) key") else {
+                creatingOrg = nil
+                lastError = "Stopped before the Secure Enclave key was created. Nothing on this Mac was changed."
+                return false
+            }
+
             creatingOrg = "Creating the Secure Enclave key. Touch the sensor"
             if await !keys.labels().contains(org.keyLabel) {
                 try await keys.createIdentity(label: org.keyLabel)
@@ -446,66 +785,11 @@ final class AppStore: ObservableObject {
     }
 
     func openClone(preferring org: Organization? = nil) {
-        guard require(.clone) else { return }
         cloneTarget = org ?? cloneableOrgs.first
     }
 
     func beginAddOrganization() {
-        guard require(.addOrganization) else { return }
         showAddOrg = true
-    }
-
-    // MARK: - Licensing
-    //
-    // The gate is drawn in Feature, and clause 6 of the EULA holds it there:
-    // mount, eject, relocate and remove are absent on purpose and stay
-    // available on a lapsed licence. Nobody's data sits behind our invoice.
-
-    /// True if the feature may run. Otherwise raises the paywall, naming it.
-    @discardableResult
-    func require(_ feature: Feature) -> Bool {
-        if license.allows(feature) { return true }
-        lockedFeature = feature
-        return false
-    }
-
-    /// Launch and once a day after: only actually reaches the network when the
-    /// cached entitlement says a re-check is due.
-    func refreshLicense() async {
-        let before = license
-        license = await licenses.refreshIfDue()
-
-        // A licence that just came back to life has a Scanner and an Activity
-        // view that have been idle. Catch them up rather than waiting out the
-        // five-minute timer.
-        if !before.isFull && license.isFull {
-            await runScan()
-            await refreshActivity()
-        }
-    }
-
-    func activate(key: String) async -> Bool {
-        activating = true
-        defer { activating = false }
-        do {
-            license = try await licenses.activate(key: key)
-            lastError = nil
-            if license.isFull {
-                lockedFeature = nil
-                showActivation = false
-                await runScan()
-                await refreshActivity()
-            }
-            return license.isFull
-        } catch {
-            lastError = error.localizedDescription
-            return false
-        }
-    }
-
-    func deactivateThisMac() async {
-        do { license = try await licenses.deactivate() }
-        catch { lastError = error.localizedDescription }
     }
 
     /// UC8: the reversible part first (git routing), then only what was asked
@@ -621,6 +905,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
     case doctor = "Doctor"
     case scanner = "Scanner"
     case activity = "Activity"
+    case settings = "Settings"
 
     var id: String { rawValue }
 
@@ -632,6 +917,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .doctor: "stethoscope"
         case .scanner: "magnifyingglass"
         case .activity: "waveform.path.ecg.rectangle"
+        case .settings: "slider.horizontal.3"
         }
     }
 
@@ -644,6 +930,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Equatable {
         case .doctor: "waveform.path.ecg"
         case .scanner: "magnifyingglass.circle.fill"
         case .activity: "waveform"
+        case .settings: "gearshape.fill"
         }
     }
 }
@@ -659,31 +946,28 @@ struct ContentView: View {
                 .background(p.sidebar)
             let page = store.selection ?? .dashboard
             VStack(spacing: 0) {
-                LicenseBanner()
                 Group {
                     switch page {
                     case .dashboard: DashboardView()
                     case .organizations: OrganizationsView()
                     case .vaults: VaultsView()
                     case .doctor: DoctorView()
-                    // Gated at the page, not inside it: the views below assume
-                    // their service has been running, and a licence that
-                    // lapsed mid-session leaves them with nothing to draw.
-                    case .scanner:
-                        if store.license.allows(.scanner) { ScannerView() }
-                        else { LockedPage(feature: .scanner) }
-                    case .activity:
-                        if store.license.allows(.activity) { ActivityView() }
-                        else { LockedPage(feature: .activity) }
+                    case .scanner: ScannerView()
+                    case .activity: ActivityView()
+                    case .settings: SettingsView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // The backdrop belongs to the page, not to the chrome above it.
+                // Applied to the whole column it also sat behind the licence
+                // banner, whose background is a 13% tint, so the strip turned
+                // blue wherever the glow reached it and amber everywhere else.
+                .background { PageBackdrop(symbol: page.backdropSymbol) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Animate the content only: animating the sidebar cross-fades the
             // nav highlight and briefly lights two rows.
             .animation(.easeInOut(duration: 0.2), value: page)
-            .background { PageBackdrop(symbol: page.backdropSymbol) }
             .background(p.content)
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -695,6 +979,21 @@ struct ContentView: View {
         } message: {
             Text(store.lastError ?? "")
         }
+        .alert(store.ejectBlocked.map { "Close what is using \($0.org.displayName)?" } ?? "",
+               isPresented: Binding(get: { store.ejectBlocked != nil },
+                                    set: { if !$0 { store.ejectBlocked = nil } }),
+               presenting: store.ejectBlocked) { block in
+            // Nothing offered when there is nothing this app may signal: a
+            // button that closes none of the holders is a lie.
+            if !block.mine.isEmpty {
+                Button(block.wereAsked ? "Force Quit and Eject" : "Close Them and Eject", role: .destructive) {
+                    Task { await store.closeHoldersAndEject(block, force: block.wereAsked) }
+                }
+            }
+            Button(block.mine.isEmpty ? "OK" : "Cancel", role: .cancel) { store.ejectBlocked = nil }
+        } message: { block in
+            Text(block.message)
+        }
         .sheet(item: $store.mountTarget) { org in
             MountSheet(org: org)
         }
@@ -702,10 +1001,6 @@ struct ContentView: View {
             CloneSheet(org: org)
         }
         .sheet(isPresented: $store.showAddOrg) { AddOrgSheet() }
-        .sheet(item: $store.lockedFeature) { feature in
-            PaywallSheet(feature: feature)
-        }
-        .sheet(isPresented: $store.showActivation) { ActivationSheet() }
         .sheet(item: $store.removeTarget) { org in
             RemoveOrgSheet(org: org)
         }
@@ -831,7 +1126,6 @@ struct SidebarView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(p.label3)
                     .lineSpacing(3)
-                LicenseFooter()
             }
             .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 18)
         }
@@ -1005,6 +1299,81 @@ struct VaultRow: View {
 
 // MARK: - Sheets
 
+/// The Touch ID preflight, rendered in place of the step it is holding back.
+/// The step resumes on its own; both buttons here are ways to stop waiting.
+///
+/// Takes its two actions rather than reaching for the store, so it can be put
+/// on screen with nothing behind it.
+struct BiometryWaitBanner: View {
+    @Environment(\.palette) private var p
+    let wait: BiometryWait
+    let onStop: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: wait.obstacle.symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(p.amber)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(wait.obstacle.headline)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(p.amberText)
+                    Text(wait.obstacle.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(p.label3)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                // One line whatever the org is called: the buttons keep their
+                // place rather than being pushed about by a long name.
+                Text(wait.action)
+                    .font(.system(size: 12))
+                    .foregroundStyle(p.label3)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                PillButton(title: "Stop Waiting", role: .neutral, height: 26, hpad: 12,
+                           radius: 7, font: .system(size: 12, weight: .medium), action: onStop)
+                // Only where LocalAuthentication says some sensor is reachable:
+                // with the lid down that means an external Touch ID keyboard,
+                // which the lid check has no way to see.
+                if wait.overridable {
+                    PillButton(title: "Continue Anyway", role: .accent, height: 26, hpad: 12,
+                               radius: 7, font: .system(size: 12, weight: .semibold), action: onContinue)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(p.well))
+    }
+}
+
+/// The same reading, one line, before the user commits to anything.
+struct BiometryHint: View {
+    @Environment(\.palette) private var p
+    let obstacle: BiometryObstacle
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: obstacle.symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(p.amber)
+                .padding(.top, 1)
+            Text(obstacle.hint)
+                .font(.system(size: 12.5))
+                .foregroundStyle(p.amberText)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct MountSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -1098,6 +1467,9 @@ struct CloneSheet: View {
                     .font(.system(size: 12.5))
                     .foregroundStyle(p.label2)
             }
+            if store.biometryWait == nil, let obstacle = store.biometryStatus.obstacle {
+                BiometryHint(obstacle: obstacle)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 FieldLabel("Repository")
                 TextField("git@host:org/repo.git", text: $url)
@@ -1116,6 +1488,11 @@ struct CloneSheet: View {
                 }
                 .foregroundStyle(pinned ? p.greenText : p.redText)
             }
+            if let wait = store.biometryWait {
+                BiometryWaitBanner(wait: wait,
+                                   onStop: { store.cancelBiometryWait() },
+                                   onContinue: { store.overrideBiometryWait() })
+            }
             HStack(spacing: 10) {
                 Spacer()
                 PillButton(title: "Cancel", role: .neutral, height: 32, hpad: 18,
@@ -1130,6 +1507,10 @@ struct CloneSheet: View {
         .frame(width: 480)
         .background(p.sheet)
         .onAppear { selectedName = org.name }
+        .task { await store.refreshBiometry() }
+        // Closing the sheet abandons the clone, rather than leaving the wait
+        // loop to start one once the lid opens.
+        .onDisappear { store.cancelBiometryWait() }
     }
 
     private func submit() {
@@ -1246,12 +1627,7 @@ struct MenuBarView: View {
             }
         }
         Divider()
-        if !store.license.allows(.scanner) {
-            Button(store.license.summary) {
-                store.showActivation = true
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        } else if store.compromiseIndicators > 0 {
+        if store.compromiseIndicators > 0 {
             Button("Scanner: \(plural(store.compromiseIndicators, "compromise indicator"))") {
                 store.selection = .scanner
                 NSApp.activate(ignoringOtherApps: true)
@@ -1260,12 +1636,58 @@ struct MenuBarView: View {
             Text(store.scanReport == nil ? "Scanner: no pass yet"
                  : "Scanner: clean · \(ScannerView.relative(store.scanReport!.finishedAt))")
         }
-        if store.license.allows(.scanner) {
-            Button("Scan Now") { Task { await store.runScan() } }
-        }
+        Button("Scan Now") { Task { await store.runScan() } }
         Divider()
         Button("Refresh") { Task { await store.refresh() } }
         Button("Open Vaultkit") { NSApp.activate(ignoringOtherApps: true) }
         Button("Quit") { NSApp.terminate(nil) }
+    }
+}
+
+/// An eject that could not proceed because something still has the vault open.
+/// Carries the holders so the alert can offer to close them, and remembers
+/// whether they have already been asked once: a process that ignored SIGTERM
+/// is a different decision from one that has not been asked yet.
+struct EjectBlock: Identifiable {
+    let id = UUID()
+    var org: Organization
+    var holders: [VaultHolder]
+    var wereAsked = false
+
+    /// Holders this app cannot signal: another user's, so only that user can
+    /// stop them. Naming them beats a silent failure to close them.
+    var theirs: [VaultHolder] { holders.filter { !$0.isMine } }
+    var mine: [VaultHolder] { DiskUtilVaultService.signalable(holders) }
+
+    /// Ten holders is the normal case, not three: a couple of shells, their
+    /// editors and a file watcher all count. Ten pids in an alert is a wall of
+    /// text, so repeats are grouped by command and only a lone process keeps
+    /// its pid, which is when the pid is actually useful.
+    var summary: String {
+        let groups = Dictionary(grouping: holders, by: \.command)
+            .sorted { a, b in
+                a.value.count != b.value.count ? a.value.count > b.value.count : a.key < b.key
+            }
+        let shown = groups.prefix(5).map { name, group in
+            group.count == 1 ? group[0].label : "\(name) (\(plural(group.count, "process", "processes")))"
+        }
+        let rest = groups.count - shown.count
+        return rest > 0 ? shown.joined(separator: ", ") + ", and \(plural(rest, "other"))"
+                        : shown.joined(separator: ", ")
+    }
+
+    var message: String {
+        var parts = ["Held open by \(summary)."]
+        if mine.isEmpty {
+            parts.append("None of them belong to you, so Vaultkit cannot close them.")
+        } else if wereAsked {
+            parts.append("They were asked to quit and did not. Forcing stops them immediately, without saving.")
+        } else {
+            parts.append("They will be asked to quit. Unsaved work in them may be lost.")
+        }
+        if !theirs.isEmpty, !mine.isEmpty {
+            parts.append("\(plural(theirs.count, "process", "processes")) \(theirs.count == 1 ? "belongs" : "belong") to another user and will be left alone.")
+        }
+        return parts.joined(separator: " ")
     }
 }

@@ -52,7 +52,7 @@ protocol VaultServing {
     /// stored (documented I1 deviation. See data-flow.md).
     func mount(_ org: Organization, passphrase: String) async throws
     func eject(_ org: Organization) async throws                      // lockVolume w/ dissenter handling
-    func dissenters(for org: Organization) async throws -> [String]   // "zsh (pid 6223)"
+    func dissenters(for org: Organization) async throws -> [VaultHolder]
 }
 
 /// Known-host pinning with published-fingerprint verification where available.

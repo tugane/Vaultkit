@@ -65,11 +65,19 @@ struct AddOrgSheet: View {
                     .lineSpacing(2)
             }
 
-            if let step = store.creatingOrg {
+            // The preflight replaces the progress line while it holds: one
+            // place in the sheet says what is happening, never two.
+            if let wait = store.biometryWait {
+                BiometryWaitBanner(wait: wait,
+                                   onStop: { store.cancelBiometryWait() },
+                                   onContinue: { store.overrideBiometryWait() })
+            } else if let step = store.creatingOrg {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text(step).font(.system(size: 12.5)).foregroundStyle(p.label2)
                 }
+            } else if let obstacle = store.biometryStatus.obstacle {
+                BiometryHint(obstacle: obstacle)
             }
 
             HStack(spacing: 10) {
@@ -96,6 +104,10 @@ struct AddOrgSheet: View {
         .padding(24)
         .frame(width: 520)
         .background(p.sheet)
+        .task { await store.refreshBiometry() }
+        // Closing the sheet abandons the step. Without this the wait loop
+        // would keep polling and create the org after the sheet was gone.
+        .onDisappear { store.cancelBiometryWait() }
     }
 
     private func field(_ label: String, _ placeholder: String, _ binding: Binding<String>) -> some View {

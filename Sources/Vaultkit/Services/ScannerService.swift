@@ -1,5 +1,41 @@
 import Foundation
 
+/// Directories a given organization's scans skip.
+///
+/// The Scanner reads every config, source and manifest in a mounted vault every
+/// five minutes. On a large vault that is expensive, and the only remedy the
+/// app offered was turning the Scanner off altogether — trading a whole
+/// organization's cover for one noisy directory.
+///
+/// Paths, not globs, and matched a segment at a time: "vendor" excludes
+/// `vendor` and everything under it and never `vendor-utils`. A glob language
+/// would be a second thing to learn and a second thing to get subtly wrong
+/// about what is still being watched.
+enum ScanExclusions {
+    private static func key(_ org: String) -> String { "vk.scanner.exclude.\(org)" }
+
+    static func load(for org: String, from d: UserDefaults = .standard) -> [String] {
+        (d.object(forKey: key(org)) as? [String] ?? []).compactMap(normalize)
+    }
+
+    static func save(_ paths: [String], for org: String, to d: UserDefaults = .standard) {
+        d.set(paths.compactMap(normalize), forKey: key(org))
+    }
+
+    /// Org-relative, no leading or trailing slash, no empties, no duplicates of
+    /// the vault root itself: excluding "" would silently disable the Scanner.
+    static func normalize(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return trimmed.isEmpty || trimmed == "." ? nil : trimmed
+    }
+
+    /// True when this org-relative path is the excluded directory or inside it.
+    static func excludes(_ rel: String, _ patterns: [String]) -> Bool {
+        patterns.contains { rel == $0 || rel.hasPrefix($0 + "/") }
+    }
+}
+
 // MARK: - Indicators
 //
 // The PolinRider campaign (DPRK, 2026) appends an obfuscated loader to build
@@ -133,6 +169,15 @@ actor ScannerService {
 
     private let fm = FileManager.default
 
+    /// Forget what is known about an organization, so the next pass is a full
+    /// one. Required when its exclusions change: *un*-excluding a directory
+    /// otherwise leaves it unscanned until something in it happens to change,
+    /// and findings inside a newly excluded one would linger on screen.
+    func invalidate(_ orgName: String) {
+        baseline[orgName] = nil
+        findings[orgName] = nil
+    }
+
     func currentFindings() -> [ScanFinding] {
         findings.values.flatMap { $0 }.sorted {
             $0.severity != $1.severity ? $0.severity > $1.severity : $0.path < $1.path
@@ -183,6 +228,7 @@ actor ScannerService {
         var touched: Set<String> = []      // relative paths re-evaluated this pass
         var files = 0
         var repos = 0
+        var excluded = 0                   // directories skipped by the org's own list
     }
 
     private func scanOrg(_ org: Organization, since: Date?, deep: Bool) -> OrgResult {
@@ -204,6 +250,9 @@ actor ScannerService {
             guard let values = try? url.resourceValues(forKeys: Set(keys)),
                   let name = values.name else { continue }
             let path = url.path
+            // Hoisted above the directory branch: an exclusion is a path, not a
+            // base name, so both branches need it.
+            let rel = path.hasPrefix(rootPath + "/") ? String(path.dropFirst(rootPath.count + 1)) : name
 
             if values.isDirectory == true {
                 if name == ".git" {
@@ -216,11 +265,15 @@ actor ScannerService {
                     walker.skipDescendants()
                 } else if Self.pruned.contains(name) {
                     walker.skipDescendants()
+                } else if ScanExclusions.excludes(rel, org.scanExclusions) {
+                    result.excluded += 1
+                    walker.skipDescendants()
                 }
                 continue
             }
 
             guard let kind = Self.classify(name: name, path: path, deep: deep) else { continue }
+            if ScanExclusions.excludes(rel, org.scanExclusions) { continue }
 
             // Incremental: skip files untouched since the last pass.
             if let since {
@@ -229,7 +282,6 @@ actor ScannerService {
                 if max(m, c) <= since { continue }
             }
 
-            let rel = path.hasPrefix(rootPath + "/") ? String(path.dropFirst(rootPath.count + 1)) : name
             result.touched.insert(rel)
             result.files += 1
             let repo = repoRoots.name(for: path, fallback: org.name)

@@ -1,4 +1,49 @@
 import Foundation
+import TuganeDesign
+
+/// How long a quarantined original is kept before it is deleted for good.
+///
+/// Ten minutes was the shipped constant, and it is a tight window to notice a
+/// false positive in: the purge is irreversible, and the file it removes is the
+/// user's own source. The choice belongs to them, so it is one.
+enum QuarantineHold {
+    static let key = "vk.quarantineHold"
+    static let standard: TimeInterval = 600
+    static let choices: [TimeInterval] = [600, 3600, 86_400, 604_800]
+
+    static func load(from d: UserDefaults = .standard) -> TimeInterval {
+        let stored = d.object(forKey: key) as? TimeInterval ?? standard
+        // Only ever one of the offered values: a hand-edited plist should not
+        // be able to set a three-second hold.
+        return choices.contains(stored) ? stored : standard
+    }
+
+    static func save(_ value: TimeInterval, to d: UserDefaults = .standard) {
+        d.set(value, forKey: key)
+    }
+
+    /// "10 minutes", "1 hour", "1 day", "1 week". The old copy divided by 60
+    /// everywhere, which would have read "10080 minutes" once a week became an
+    /// option.
+    static func label(_ t: TimeInterval) -> String {
+        switch t {
+        case ..<3600: plural(Int(t / 60), "minute")
+        case ..<86_400: plural(Int(t / 3600), "hour")
+        case ..<604_800: plural(Int(t / 86_400), "day")
+        default: plural(Int(t / 604_800), "week")
+        }
+    }
+
+    /// Short form, for a picker where all the options are side by side.
+    static func short(_ t: TimeInterval) -> String {
+        switch t {
+        case ..<3600: "\(Int(t / 60))m"
+        case ..<86_400: "\(Int(t / 3600))h"
+        case ..<604_800: "\(Int(t / 86_400))d"
+        default: "\(Int(t / 604_800))w"
+        }
+    }
+}
 import CryptoKit
 
 // MARK: - Acting on a hit

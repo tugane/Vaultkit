@@ -32,36 +32,182 @@ final class DoctorService: DoctorServing, @unchecked Sendable {
     // Observed in the wild: the Secure Enclave provider can emit an SSHSIG that
     // does not verify, while SSH auth with the same key keeps working. The
     // commit looks signed, git reports "B", and nothing warns you, so check.
+    //
+    // git collapses two unrelated events into that one letter and they want
+    // opposite responses. A provider that emitted no signature bytes is a
+    // signing failure over intact content. A complete signature that does not
+    // match its commit is what an altered commit looks like. Reported as one
+    // finding, the second reads as routine noise, so they are separated here
+    // by looking inside the signature the commit actually carries.
+    //
+    // Neither is auto-fixable and neither remediation names a command that
+    // rewrites history. Re-signing replaces the failing signature with a valid
+    // one over whatever the content is now, destroying the only evidence this
+    // check exists to surface; and commit rewriting is itself an attacker
+    // technique Vaultkit detects elsewhere (ScannerService's propagation rule),
+    // so it has no place in the app's own advice.
+
+    /// Why a commit that git reports as "B" failed to verify.
+    enum SignatureFault: Hashable {
+        case emptySignature   // an SSHSIG envelope with no signature bytes in it
+        case mismatch         // a complete signature, not over this commit
+        case unclassified     // not an SSHSIG this can read (a PGP block, say)
+    }
 
     private func signatureChecks(orgs: [Organization]) async -> [DoctorFinding] {
         var findings: [DoctorFinding] = []
         for org in orgs where org.signingEnabled && org.vault == .mounted {
             let root = expand(org.folderPath)
             guard let repos = try? fm.contentsOfDirectory(atPath: root) else { continue }
-            for repo in repos {
-                let path = "\(root)/\(repo)"
-                guard fm.fileExists(atPath: "\(path)/.git") else { continue }
-                guard let r = try? await runner.run(
-                    "/usr/bin/git",
-                    ["-C", path, "log", "--format=%h %G?", "-20"]
-                ), r.status == 0 else { continue }
-
-                let bad = r.stdout.split(separator: "\n").filter { line in
-                    let flag = line.split(separator: " ").last.map(String.init) ?? ""
-                    return flag == "B" || flag == "E"
-                }
-                guard !bad.isEmpty else { continue }
-                findings.append(DoctorFinding(
-                    checkName: "Unverifiable commit signatures",
-                    severity: .warning,
-                    detail: "\(plural(bad.count, "recent commit")) in \(repo) carry a signature that does not verify (\(bad.prefix(3).joined(separator: ", "))). Usually a Secure Enclave provider glitch rather than tampering, but pushing them shows red on the forge.",
-                    remediation: "Re-sign the tip with: git -C \(path) commit --amend --no-edit",
-                    autoFixable: false,
-                    orgName: org.name
-                ))
+            for repo in repos.sorted() where fm.fileExists(atPath: "\(root)/\(repo)/.git") {
+                findings += await signatureFindings(repo: repo, path: "\(root)/\(repo)", org: org)
             }
         }
         return findings
+    }
+
+    func signatureFindings(repo: String, path: String, org: Organization) async -> [DoctorFinding] {
+        guard let log = try? await runner.run(
+            "/usr/bin/git",
+            ["-C", path, "log", "--format=%H %G?", "-20"]
+        ), log.status == 0 else { return [] }
+
+        var faulted: [SignatureFault: [String]] = [:]
+        var uncheckable: [String] = []
+
+        for line in log.stdout.split(separator: "\n") {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count == 2 else { continue }
+            let hash = String(parts[0])
+            let short = String(hash.prefix(7))
+            switch parts[1] {
+            case "B":
+                // Ask the object itself. The letter alone cannot tell a
+                // provider that signed nothing from a signature over other
+                // content, and that difference decides the severity.
+                guard let raw = try? await runner.run(
+                    "/usr/bin/git", ["-C", path, "cat-file", "commit", hash]
+                ), raw.status == 0, let block = Self.signatureBlock(inRawCommit: raw.stdout) else {
+                    faulted[.unclassified, default: []].append(short)
+                    continue
+                }
+                faulted[Self.fault(inSignatureBlock: block), default: []].append(short)
+            case "E":
+                uncheckable.append(short)
+            default:
+                continue
+            }
+        }
+
+        var findings: [DoctorFinding] = []
+
+        if let empty = faulted[.emptySignature] {
+            findings.append(DoctorFinding(
+                checkName: "Commits signed with an empty signature",
+                severity: .warning,
+                detail: "\(plural(empty.count, "recent commit")) in \(repo) (\(Self.list(empty))) carry an SSHSIG with no signature bytes inside it. The Secure Enclave provider wrote the envelope and then signed nothing, so the commit looks signed and verifies as bad. The content is intact: this is a signing failure, not an altered commit.",
+                remediation: "Nothing to repair in place. They stay unverified on the forge, and Vaultkit will not re-sign them: rewriting a commit to repair its signature is indistinguishable from the tampering this check exists to catch.",
+                autoFixable: false,
+                orgName: org.name))
+        }
+
+        if let mismatch = faulted[.mismatch] {
+            findings.append(DoctorFinding(
+                checkName: "Commit signatures that do not match their commit",
+                severity: .critical,
+                detail: "\(plural(mismatch.count, "recent commit")) in \(repo) (\(Self.list(mismatch))) carry a complete signature that does not verify against the commit it is attached to. That is what a commit altered after it was signed looks like, and what a signature lifted from another commit looks like.",
+                remediation: "Leave the history as it is: the mismatch is the evidence, and a rewrite erases it. Read the commit with git show, check the reflog for a rewrite you did not perform, and treat the key as suspect until this is explained.",
+                autoFixable: false,
+                orgName: org.name))
+        }
+
+        if let unreadable = faulted[.unclassified] {
+            findings.append(DoctorFinding(
+                checkName: "Unreadable commit signatures",
+                severity: .warning,
+                detail: "\(plural(unreadable.count, "recent commit")) in \(repo) (\(Self.list(unreadable))) fail verification carrying a signature Vaultkit cannot read, so it cannot say whether the signer failed or the commit changed. A PGP-signed commit in an SSH-signing organization reads this way.",
+                remediation: "Find out what signed them: git log --show-signature -1 <commit>.",
+                autoFixable: false,
+                orgName: org.name))
+        }
+
+        if !uncheckable.isEmpty {
+            findings.append(DoctorFinding(
+                checkName: "Commit signatures git cannot check",
+                severity: .warning,
+                detail: "\(plural(uncheckable.count, "recent commit")) in \(repo) (\(Self.list(uncheckable))) are signed, but git has no key to check them against. Signing that is never verified detects nothing.",
+                remediation: "Add \(org.keyLabel)'s public key to the file named by gpg.ssh.allowedSignersFile.",
+                autoFixable: false,
+                orgName: org.name))
+        }
+
+        return findings
+    }
+
+    /// Commit hashes for a detail line: enough to go and look, not a wall.
+    static func list(_ hashes: [String]) -> String {
+        let shown = hashes.prefix(3).joined(separator: ", ")
+        return hashes.count > 3 ? "\(shown) and \(hashes.count - 3) more" : shown
+    }
+
+    /// The signature header of a raw commit object: a `gpgsig` line whose
+    /// continuations are indented one space, ending at the first line that is
+    /// not. Returns the armored block with that indent removed.
+    static func signatureBlock(inRawCommit raw: String) -> String? {
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("gpgsig") }),
+              let space = lines[start].firstIndex(of: " ") else { return nil }
+
+        var block = [String(lines[start][lines[start].index(after: space)...])]
+        var i = start + 1
+        while i < lines.count, lines[i].hasPrefix(" ") {
+            block.append(String(lines[i].dropFirst()))
+            i += 1
+        }
+        return block.joined(separator: "\n")
+    }
+
+    /// Reads the u32-length-prefixed strings SSHSIG is built from.
+    private struct SSHReader {
+        private let data: Data
+        private var cursor = 0
+        init(_ data: Data) { self.data = Data(data) }   // re-base: slices keep their origin's indices
+
+        mutating func string() -> Data? {
+            guard cursor + 4 <= data.count else { return nil }
+            let length = data[cursor..<cursor + 4].reduce(0) { $0 << 8 | Int($1) }
+            let start = cursor + 4
+            guard start + length <= data.count else { return nil }
+            cursor = start + length
+            return Data(data[start..<start + length])
+        }
+    }
+
+    /// Classify a failing signature (PROTOCOL.sshsig): a "SSHSIG" magic, a u32
+    /// version, then five strings, the last holding an algorithm name and the
+    /// signature bytes proper. A provider that fails part way still emits a
+    /// well-formed envelope, so the emptiness is only visible this deep: the
+    /// case that prompted this had eight zero bytes where a P-256 (r, s) pair
+    /// of about seventy belongs.
+    static func fault(inSignatureBlock block: String) -> SignatureFault {
+        guard block.contains("BEGIN SSH SIGNATURE") else { return .unclassified }
+        let body = block.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined()
+        guard let blob = Data(base64Encoded: body), blob.count > 10,
+              Data(blob.prefix(6)) == Data("SSHSIG".utf8) else { return .unclassified }
+
+        var envelope = SSHReader(blob.dropFirst(10))          // past magic + version
+        for _ in 0..<4 {                                      // publickey, namespace, reserved, hash
+            guard envelope.string() != nil else { return .unclassified }
+        }
+        guard let signature = envelope.string() else { return .unclassified }
+
+        var inner = SSHReader(signature)
+        guard inner.string() != nil, let bytes = inner.string() else { return .unclassified }
+
+        // A real signature is a pair of large integers: 64 bytes for ed25519,
+        // about 70 for ecdsa, 256 for rsa. Nothing legitimate is this small.
+        let signedNothing = bytes.count < 16 || bytes.allSatisfy { $0 == 0 }
+        return signedNothing ? .emptySignature : .mismatch
     }
 
     // MARK: placeholder guards (a cancelled unlock once left one writable)

@@ -31,7 +31,8 @@ struct OrgDiscovery {
                 keyLabel: "ssh-\(name)",
                 signingEnabled: perOrg.contains("gpgsign = true"),
                 vault: .none,                        // filled in by VaultServing
-                sshCommand: firstValue(of: "sshCommand", in: perOrg)
+                sshCommand: firstValue(of: "sshCommand", in: perOrg),
+                scanExclusions: ScanExclusions.load(for: name)
             ))
         }
         return orgs

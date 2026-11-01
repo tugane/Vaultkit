@@ -9,6 +9,50 @@ final class ActivationDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// Quit is the one auto-secure trigger the store cannot own: AppKit asks
+    /// here whether it may terminate, and while a vault is still open the
+    /// answer has to be "wait".
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let store = AutoSecureTermination.store,
+              store.autoSecure.allows(.quit),
+              store.hasVaultsToSecureOnQuit else { return .terminateNow }
+        AutoSecureTermination.beginSweep(store)
+        return .terminateLater
+    }
+}
+
+/// Holds termination open for one auto-secure sweep, and hands the store to a
+/// delegate SwiftUI builds for us and never introduces to it.
+@MainActor
+enum AutoSecureTermination {
+    weak static var store: AppStore?
+
+    /// A hard ceiling on how long quitting may hang. One eject can sleep five
+    /// seconds and then shell out to diskutil with no timeout of its own, and
+    /// an app that will not quit is worse than a vault that closes a minute
+    /// later: the idle check will catch it on the next launch either way.
+    static let budget: TimeInterval = 8
+
+    private static var replied = false
+
+    static func beginSweep(_ store: AppStore) {
+        replied = false
+        Task { @MainActor in
+            await store.autoSecureSweep(trigger: .quit)
+            allowTermination()
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(budget))
+            allowTermination()
+        }
+    }
+
+    private static func allowTermination() {
+        guard !replied else { return }
+        replied = true
+        NSApp.reply(toApplicationShouldTerminate: true)
+    }
 }
 
 @main

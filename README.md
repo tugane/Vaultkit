@@ -60,24 +60,17 @@ that followed. It packages a day of expert setup into a few minutes.
 **Early: version 0.2.** It is used daily by its author and does real work, but it edits
 your git configuration and creates encrypted volumes.
 
-Vaultkit was open source through 0.1.0 and is commercial from 0.2.0; the source is no
-longer public. A security tool you cannot read asks for more trust than one you can, so
-the rest of the argument has to carry more weight: every release is signed with a
-Developer ID and notarized by Apple, each one publishes its SHA-256, [SECURITY.md](SECURITY.md)
-states the threat model and the trust boundaries in full, and — the part that matters
-most — Vaultkit stores nothing of its own. It writes standard git config, standard
-`known_hosts` entries and standard APFS volumes. Delete it and your setup keeps working.
-Nothing you build with it is held hostage to it.
+Vaultkit is free and open source under the GPL, and the source is public. A security
+tool you can read asks less of your trust than one you cannot, which for this kind of
+tool is the whole argument. The rest of it: every release is signed and notarized by
+Apple, each one publishes its SHA-256, [SECURITY.md](SECURITY.md) states the threat
+model and the trust boundaries in full, and Vaultkit stores nothing of its own. It
+writes standard git config, standard `known_hosts` entries and standard APFS volumes.
+Delete it and your setup keeps working. Nothing you build with it is held hostage to it.
 
 ## What it costs
 
-Fourteen days with every feature on, no card, no account. After that it is an annual
-subscription covering up to three Macs and every update in the year.
-
-A lapsed licence never stands between you and your own data: mounting, ejecting and
-removing organizations keep working forever, and that is written into clause 6 of the
-[licence](LICENSE), not just this paragraph. What a subscription covers is adding
-organizations, cloning into a vault, the Scanner and the Activity view.
+Nothing. Every feature, on every Mac, with no account, no card and no trial period.
 
 ## Requirements
 
@@ -98,19 +91,12 @@ See [SECURITY.md](SECURITY.md) for what a signature does and does not prove.
 
 ## Build
 
-For the licence holder of the source. The repository is private.
-
 ```bash
 git clone git@github.com:tugane/Vaultkit.git
 cd Vaultkit
 swift build
 swift run
 ```
-
-A development build carries the placeholder signing key, so activation will refuse
-every key until `Licensing.signingPublicKey` is filled in from `server/`'s keygen —
-see [docs/licensing.md](docs/licensing.md). `scripts/release.sh` refuses to build a
-release while the placeholder is there.
 
 To install it as a real app in `/Applications` rather than running it from the
 command line:
@@ -172,16 +158,13 @@ report a vulnerability. The design documents are worth reading too:
 
 - [Use cases](docs/use-cases.md): who it is for, and what each flow guarantees
 - [Data flow](docs/data-flow.md): architecture, privilege inventory, failure modes
-- [Licensing](docs/licensing.md): the trial, the gate, and the activation service
 
 ## Privacy
 
 No telemetry, no analytics, no update check, no account.
 
-Vaultkit makes exactly one kind of request of its own: activating a licence key, and
-re-confirming it about once a week. That sends the key, a one-way hash of this Mac's
-hardware UUID, and the computer's name — nothing else, ever. The trial runs fully
-offline. [PRIVACY.md](PRIVACY.md) lists every field and what is kept.
+Vaultkit makes no requests of its own at all. Nothing is sent anywhere, ever.
+[PRIVACY.md](PRIVACY.md) sets that out in full.
 
 The only other traffic is the SSH connection you asked for: a clone, or a verification
 test you triggered. Those go straight to your forge.
@@ -189,12 +172,11 @@ test you triggered. Those go straight to your forge.
 ## Reporting problems
 
 Bug reports are very welcome at tooamiel@gmail.com, and security reports especially:
-[SECURITY.md](SECURITY.md) says how to send one. The repository is private, so there is
-no pull request to open, but a report with a reproduction gets a fix.
+[SECURITY.md](SECURITY.md) says how to send one. Pull requests are welcome too.
 
-If you have a checkout, the services are protocol-first precisely so the system can be
-faked, and anything under `Sources/Vaultkit/Services/` should come with tests.
-`Tests/VaultkitTests` shows how.
+The services are protocol-first precisely so the system can be faked, and anything
+under `Sources/Vaultkit/Services/` should come with tests. `Tests/VaultkitTests`
+shows how.
 
 ```bash
 swift test
@@ -206,9 +188,8 @@ Check the `Executed N tests` line rather than the exit code.
 
 ## Licence
 
-Commercial. Copyright (c) 2026 Amiel Tugane Mutarataza, all rights reserved. See
-[LICENSE](LICENSE) for the terms, [COPYRIGHT](COPYRIGHT) for the notice and
-[PRIVACY.md](PRIVACY.md) for what activation sends.
+GPL-3.0-or-later. Copyright (C) 2026 Amiel Tugane Mutarataza. See [LICENSE](LICENSE)
+for the terms and [COPYRIGHT](COPYRIGHT) for the notice.
 
 Versions up to 0.1.0 were GPL-3.0-or-later. That grant stands for the copies it was
 given with; it does not cover 0.2.0 or later.
